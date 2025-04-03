@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 import { FaArrowLeft, FaArrowRight } from "react-icons/fa";
-import { supabase } from "../supabaseClient"; // Adjust path if needed
+import { supabase } from "../supabaseClient"; // Adjust the path if needed
 
-const UserMeals = () => {
+const Personalized = () => {
   const [meals, setMeals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -100,25 +100,44 @@ const UserMeals = () => {
               className="flex flex-nowrap gap-8 overflow-x-scroll snap-x snap-mandatory scroll-smooth px-6 hide-scrollbar justify-start"
             >
               {categorizedMeals[type].length > 0 ? (
-                categorizedMeals[type].map((meal) => (
-                  <div
-                    key={meal.id}
-                    className="min-w-[350px] bg-white shadow-lg rounded-2xl p-6 snap-center border border-gray-200"
-                  >
-                    <h3 className="text-xl font-semibold text-gray-800">
-                      {meal.meal_name}
-                    </h3>
-                    <p className="text-gray-600 mt-2">
-                      <span className="font-bold">Ingredients:</span> {meal.meal_ingredients}
-                    </p>
-                    <p className="text-gray-600 mt-2">
-                      <span className="font-bold">Nutritional Info:</span> {meal.nutrition_total}
-                    </p>
-                    <p className="text-sm text-gray-500 mt-4">
-                      Created: {new Date(meal.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                ))
+                categorizedMeals[type].map((meal) => {
+                  // Parse JSON nutritional data safely
+                  let nutritionInfo = {};
+                  try {
+                    nutritionInfo = JSON.parse(meal.nutrition_total);
+                  } catch (error) {
+                    console.error("Error parsing nutrition data:", error);
+                  }
+
+                  return (
+                    <div
+                      key={meal.id}
+                      className="min-w-[350px] bg-white shadow-lg rounded-2xl p-6 snap-center border border-gray-200"
+                    >
+                      <h3 className="text-xl font-semibold text-gray-800">
+                        {meal.meal_name}
+                      </h3>
+                      <p className="text-gray-600 mt-2">
+                        <span className="font-bold">Ingredients:</span> {meal.meal_ingredients.replace(/[[\]"]/g, '')}
+                      </p>
+                      <p className="text-gray-600 mt-2">
+                        <span className="font-bold">Nutritional Info:</span>
+                      </p>
+                      <ul className="list-disc list-inside text-gray-600">
+                        <li><strong>Carbs:</strong> {nutritionInfo.carbohydrate || "N/A"} g</li>
+                        <li><strong>Protein:</strong> {nutritionInfo.protein || "N/A"} g</li>
+                        <li><strong>Fat:</strong> {nutritionInfo.total_fat || "N/A"} g</li>
+                        <li><strong>Fiber:</strong> {nutritionInfo.dietary_fibre_total || "N/A"} g</li>
+                        <li><strong>Calcium:</strong> {nutritionInfo.calcium_mg || "N/A"} mg</li>
+                        <li><strong>Iron:</strong> {nutritionInfo.iron_mg || "N/A"} mg</li>
+                        <li><strong>Zinc:</strong> {nutritionInfo.zinc_mg || "N/A"} mg</li>
+                      </ul>
+                      <p className="text-sm text-gray-500 mt-4">
+                        Created: {new Date(meal.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                  );
+                })
               ) : (
                 <p className="text-gray-500">No meals found for {type}.</p>
               )}
@@ -138,4 +157,4 @@ const UserMeals = () => {
   );
 };
 
-export default UserMeals;
+export default Personalized;
