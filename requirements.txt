@@ -1,5 +1,0 @@
-tensorflow
-supabase
-numpy
-pandas
-scikit-learn
