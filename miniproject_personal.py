@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify
 import pandas as pd
 import numpy as np
@@ -6,6 +5,8 @@ from supabase import create_client, Client
 from sklearn.linear_model import LogisticRegression
 import time
 import re
+import random
+import json
 
 app = Flask(__name__)
 from flask_cors import CORS
@@ -222,6 +223,71 @@ def recommend_meals_lr(meal_type, df, restrictions, targets, num_meals=3):
 
     return meal_options[:num_meals]
 
+# Function to generate a creative meal name with main ingredients
+def generate_meal_name(user_id, meal_type, ingredients):
+    if not ingredients:
+        return f"{meal_type.capitalize()} Placeholder"
+    
+    def simplify_name(name):
+        return re.split(r'[,(]', name)[0].strip()
+    
+    main_ingredients = [simplify_name(ingredients[i]) for i in range(min(2, len(ingredients)))]
+    base_name = f"{meal_type.capitalize()} {main_ingredients[0]} & {main_ingredients[1]}"
+    
+    try:
+        response = supabase.table("personal_recommendation").select("meal_name")\
+            .eq("user_id", user_id)\
+            .eq("meal_type", meal_type)\
+            .eq("meal_name", base_name)\
+            .execute()
+        if not response.data:
+            return base_name
+    except:
+        return base_name
+    
+    descriptors = ['Delight', 'Feast', 'Glow']
+    for descriptor in descriptors:
+        new_name = f"{base_name} {descriptor}"
+        try:
+            response = supabase.table("personal_recommendation").select("meal_name")\
+                .eq("user_id", user_id)\
+                .eq("meal_type", meal_type)\
+                .eq("meal_name", new_name)\
+                .execute()
+            if not response.data:
+                return new_name
+        except:
+            return new_name
+    
+    return f"{base_name} {random.randint(1, 100)}"
+
+# Function to delete and insert recommendations into Supabase
+def delete_and_insert_recommendations(user_id, meal_type, options):
+    for option in options:
+        meal_name = generate_meal_name(user_id, meal_type, option['ingredients'])
+        data = {
+            'user_id': user_id,
+            'meal_type': meal_type,
+            'meal_name': meal_name,
+            'meal_ingredients': json.dumps(option['ingredients']),
+            'nutrition_total': json.dumps(option['nutritional_totals'])
+        }
+        try:
+            # Delete existing record to respect unique constraint
+            supabase.table("personal_recommendation")\
+                .delete()\
+                .eq("user_id", user_id)\
+                .eq("meal_type", meal_type)\
+                .eq("meal_name", meal_name)\
+                .execute()
+            
+            # Insert the new record
+            supabase.table("personal_recommendation")\
+                .insert(data)\
+                .execute()
+        except Exception as e:
+            print(f"Error storing recommendation for {user_id}, {meal_type}, {meal_name}: {e}")
+
 # API Endpoint to trigger personalized recommendations
 @app.route('/api/generate-personalized-recommendations', methods=['POST'])
 def generate_personalized_recommendations():
@@ -252,6 +318,8 @@ def generate_personalized_recommendations():
                 'nutritional_totals': {k: round(float(v), 2) for k, v in option['totals'].items()}
             } for i, option in enumerate(options)
         ]
+        # Store in Supabase
+        delete_and_insert_recommendations(user_id, meal_type, all_recommendations[meal_type])
 
     response = {
         'user_id': user_id,
@@ -261,6 +329,4 @@ def generate_personalized_recommendations():
     return jsonify(response)
 
 if __name__ == '__main__':
-    import os
-port = int(os.environ.get("PORT", 5001))
-app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=5001, debug=True)
