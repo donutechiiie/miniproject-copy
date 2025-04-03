@@ -28,14 +28,27 @@ const UserMeals = () => {
 
       const { data: mealData, error: mealError } = await supabase
         .from("standard_recommendation")
-        .select("*")
+        .select("meal_name, meal_ingredients, nutrition_total, meal_type, created_at")
         .eq("user_id", userId)
         .order("meal_type", { ascending: true });
 
       if (mealError) {
         setError(mealError.message);
       } else {
-        setMeals(mealData);
+        mealData.forEach((meal) => {
+          console.log("Meal:", meal.meal_name);
+          console.log("Nutrition Data:", meal.nutrition_total); // Debugging log
+        });
+
+        const cleanedMeals = mealData.map((meal) => ({
+          ...meal,
+          meal_ingredients: cleanIngredientNames(meal.meal_ingredients),
+          protein: parseNutrition(meal.nutrition_total, "protein"),
+          carbs: parseNutrition(meal.nutrition_total, "carbohydrate"),
+          fats: parseNutrition(meal.nutrition_total, "total_fat"),
+          iron: parseNutrition(meal.nutrition_total, "iron"), // Fetch Iron value
+        }));
+        setMeals(cleanedMeals);
       }
 
       setLoading(false);
@@ -70,7 +83,6 @@ const UserMeals = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-white to-gray-100 p-6 flex flex-col items-center">
-      {/* Updated Heading and Slim Text */}
       <h2 className="text-4xl font-bold text-gray-900 text-center mb-4">
         Your Standard Diet Plan
       </h2>
@@ -85,17 +97,14 @@ const UserMeals = () => {
             {type}
           </h3>
 
-          {/* Scrollable Meal Section */}
           <div className="relative">
-            {/* Left Scroll Button */}
             <button
-              className="absolute left-0 top-1/2 transform -translate-y-1/2 p-3 bg-gray-200 rounded-full shadow-md hover:bg-gray-300 transition z-10"
+              className="absolute left-0 top-1/2 transform -translate-y-1/2 p-3 bg-green-600 text-white rounded-full shadow-md hover:bg-green-700 transition z-10"
               onClick={() => scrollLeft(type)}
             >
               <FaArrowLeft />
             </button>
 
-            {/* Meal Cards Container */}
             <div
               ref={mealRefs[type]}
               className="flex gap-6 overflow-x-auto snap-x snap-mandatory scroll-smooth px-4 hide-scrollbar justify-center"
@@ -112,7 +121,16 @@ const UserMeals = () => {
                     <span className="font-bold">Ingredients:</span> {meal.meal_ingredients}
                   </p>
                   <p className="text-gray-600 mt-2">
-                    <span className="font-bold">Nutritional Info:</span> {meal.nutrition_total}
+                    <span className="font-bold">Protein:</span> {meal.protein}g
+                  </p>
+                  <p className="text-gray-600 mt-2">
+                    <span className="font-bold">Carbs:</span> {meal.carbs}g
+                  </p>
+                  <p className="text-gray-600 mt-2">
+                    <span className="font-bold">Fats:</span> {meal.fats}g
+                  </p>
+                  <p className="text-gray-600 mt-2">
+                    <span className="font-bold">Iron:</span> {meal.iron}mg
                   </p>
                   <p className="text-sm text-gray-500 mt-4">
                     Created: {new Date(meal.created_at).toLocaleDateString()}
@@ -121,9 +139,8 @@ const UserMeals = () => {
               ))}
             </div>
 
-            {/* Right Scroll Button */}
             <button
-              className="absolute right-0 top-1/2 transform -translate-y-1/2 p-3 bg-gray-200 rounded-full shadow-md hover:bg-gray-300 transition z-10"
+              className="absolute right-0 top-1/2 transform -translate-y-1/2 p-3 bg-green-600 text-white rounded-full shadow-md hover:bg-green-700 transition z-10"
               onClick={() => scrollRight(type)}
             >
               <FaArrowRight />
@@ -133,6 +150,34 @@ const UserMeals = () => {
       ))}
     </div>
   );
+};
+
+// 🛠 Function to parse nutrition values correctly
+const parseNutrition = (nutrition, key) => {
+  try {
+    const parsed = typeof nutrition === "string" ? JSON.parse(nutrition) : nutrition;
+    if (!parsed) return "N/A";
+
+    // Handle different possible key names for Iron
+    if (key === "iron") {
+      return parsed["iron"] ?? parsed["iron_mg"] ?? parsed["Fe"] ?? "N/A";
+    }
+
+    return parsed[key] ?? "N/A";
+  } catch (error) {
+    console.error("Error parsing nutrition:", error);
+    return "N/A";
+  }
+};
+
+// 🛠 Function to clean ingredient names (remove scientific names)
+const cleanIngredientNames = (ingredients) => {
+  try {
+    const parsed = typeof ingredients === "string" ? JSON.parse(ingredients) : ingredients;
+    return parsed.map((item) => item.split(" (")[0]).join(", "); // Extract common name
+  } catch {
+    return "Unknown Ingredients";
+  }
 };
 
 export default UserMeals;
