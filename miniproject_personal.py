@@ -261,4 +261,6 @@ def generate_personalized_recommendations():
     return jsonify(response)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)  # Runs on port 5001 to avoid conflict with standard1
+    import os
+port = int(os.environ.get("PORT", 5001))
+app.run(host='0.0.0.0', port=port, debug=False)
