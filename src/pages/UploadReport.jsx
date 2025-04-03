@@ -7,52 +7,100 @@ import { supabase } from "../supabaseClient";
 
 export default function ReportUpload() {
   const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [extractingText, setExtractingText] = useState(false);
   const [message, setMessage] = useState("");
+  const [notes, setNotes] = useState("");
+  const [progressData, setProgressData] = useState([]);
+  
 
   useEffect(() => {
-    if (file) {
-      const objectUrl = URL.createObjectURL(file);
-      setPreview(objectUrl);
-      return () => URL.revokeObjectURL(objectUrl);
-    }
-  }, [file]);
+    fetchProgressData();
+    fetchUserNotes();
+  }, []);
 
-  const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0];
-    if (!selectedFile) return;
+  const fetchUserNotes = async () => {
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData?.user?.id) return;
+    const userId = authData.user.id;
 
-    if (selectedFile.size > 10 * 1024 * 1024) {
-      alert("File size exceeds 10MB limit.");
-      return;
-    }
+    const { data: user } = await supabase
+      .from("UserTable")
+      .select("notes")
+      .eq("auth_uid", userId)
+      .single();
+    
+    if (user) setNotes(user.notes || "");
+  };
 
-    if (selectedFile.type === "image/png" || selectedFile.type === "image/jpeg") {
-      setFile(selectedFile);
-    } else {
-      alert("Only PNG and JPEG images are allowed.");
-      setFile(null);
-    }
+  const updateUserNotes = async () => {
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData?.user?.id) return;
+    const userId = authData.user.id;
+
+    const updates = { notes: notes };
+
+    const { error } = await supabase
+      .from("UserTable")
+      .update(updates)
+      .eq("auth_uid", userId);
+    
+    alert(error ? "Failed to update allergies" : "Allergies updated successfully!");
+  };
+
+  const fetchProgressData = async () => {
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData?.user?.id) return;
+    const userId = authData.user.id;
+
+    const { data: reports } = await supabase
+      .from("reports")
+      .select("extracted_text, created_at")
+      .eq("auth_uid", userId)
+      .order("created_at", { ascending: true });
+
+    const extractValues = (text) => {
+      const patterns = {
+        TSH: /TSH\s*[:\-]?\s*(\d+(\.\d+)?)/i,
+        cholesterol: /cholesterol\s*[:\-]?\s*(\d+(\.\d+)?)/i,
+        hemoglobin: /ha?emoglobin\s*[:\-]?\s*(\d+(\.\d+)?)/i,
+        sugar: /sugar\s*[:\-]?\s*(\d+(\.\d+)?)/i,
+      };
+
+      let extracted = {};
+      for (const key in patterns) {
+        const match = text.match(patterns[key]);
+        extracted[key] = match ? parseFloat(match[1]) : null;
+      }
+      return extracted;
+    };
+
+    const extractedValues = reports.map((report, index) => ({
+      label: `Report ${index + 1}`,
+      ...extractValues(report.extracted_text),
+    }));
+
+    setProgressData(extractedValues);
   };
 
   const handleUpload = async () => {
-    if (!file) {
-      alert("Please select a file before uploading.");
-      return;
-    }
+    if (!file) return alert("Please select a file before uploading.");
 
     setUploading(true);
     setMessage("");
 
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData?.user?.id) {
+      setMessage("Authentication error. Please log in again.");
+      setUploading(false);
+      return;
+    }
+    const userId = authData.user.id;
+
     const fileExt = file.name.split(".").pop();
-    const filePath = `reports/${Date.now()}.${fileExt}`;
+    const filePath = `reports/${userId}_${Date.now()}.${fileExt}`;
 
-    const { data, error } = await supabase.storage.from("reports").upload(filePath, file);
-
-    if (error) {
-      console.error("Upload error:", error.message);
+    const { error: uploadError } = await supabase.storage.from("reports").upload(filePath, file);
+    if (uploadError) {
       setMessage("Upload failed. Try again.");
       setUploading(false);
       return;
@@ -60,147 +108,115 @@ export default function ReportUpload() {
 
     const { data: fileData } = supabase.storage.from("reports").getPublicUrl(filePath);
     const imageUrl = fileData.publicUrl;
-    console.log("Uploaded file URL:", imageUrl);
-
-    // ✅ Generate a UUID
-    const userId = crypto.randomUUID();
-    console.log("Generated User ID:", userId);
-
-    // ✅ Check if user exists in UserTable
-    const { data: existingUser, error: userCheckError } = await supabase
-      .from("UserTable")
-      .select("user_id")
-      .eq("user_id", userId)
-      .single();
-
-    if (userCheckError) {
-      console.log("User does not exist, inserting new user...");
-
-      // ✅ Insert user into UserTable first
-      const { error: userInsertError } = await supabase
-        .from("UserTable")
-        .insert([{ user_id: userId }]);
-
-      if (userInsertError) {
-        console.error("User insert error:", userInsertError.message);
-        setMessage(`User creation failed: ${userInsertError.message}`);
-        setUploading(false);
-        return;
-      }
-
-      console.log("User inserted successfully!");
-    }
-
-    // ✅ Perform OCR
-    setExtractingText(true);
-    setMessage("Extracting text from image...");
 
     try {
       const response = await fetch(imageUrl);
-      if (!response.ok) throw new Error(`Failed to fetch image: ${response.statusText}`);
+      if (!response.ok) throw new Error("Failed to fetch image.");
 
       const blob = await response.blob();
       const { data: ocrResult } = await Tesseract.recognize(blob, "eng");
       const extractedText = ocrResult?.text?.trim() || "";
 
-      console.log("Extracted Text:", extractedText);
-
       if (!extractedText) {
-        setMessage("No readable text found in the image.");
-        setExtractingText(false);
+        setMessage("No readable text found.");
         setUploading(false);
         return;
       }
 
-      // ✅ Insert into reports table
-      const { error: insertError } = await supabase
-        .from("reports")
-        .insert([{ user_id: userId, extracted_text: extractedText }]);
-
-      if (insertError) {
-        console.error("Insert error:", insertError.message);
-        setMessage(`Insert failed: ${insertError.message}`);
-      } else {
-        setMessage("File uploaded & text extracted successfully!");
-      }
-    } catch (ocrError) {
-      console.error("OCR error:", ocrError);
+      await supabase.from("reports").insert([{ auth_uid: userId, extracted_text: extractedText, created_at: new Date() }]);
+      setMessage("File uploaded & text extracted successfully!");
+      fetchProgressData();
+    } catch {
       setMessage("OCR failed. Try another image.");
     }
 
-    setExtractingText(false);
     setUploading(false);
   };
+  
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
       <h1 className="text-3xl font-bold text-gray-900">
         Nutrition <span className="font-light">Report Upload</span>
       </h1>
-      <p className="text-gray-600 mt-2">
-        Upload your nutrition report images to generate insightful analytics.
-      </p>
 
       <div className="grid md:grid-cols-2 gap-8 mt-6">
-        {/* Upload Section */}
         <div className="bg-white shadow-md p-6 rounded-lg">
           <h2 className="text-xl font-semibold mb-4">Upload New Report</h2>
-          <p className="text-sm text-gray-500 mb-4">Supported formats: PNG, JPEG (Max: 10MB)</p>
 
-          {/* Upload Box */}
           <label className="border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center p-10 cursor-pointer hover:border-green-500 transition">
-            <input
-              type="file"
-              className="hidden"
-              accept="image/png, image/jpeg"
-              onChange={handleFileChange}
-            />
+            <input type="file" className="hidden" accept="image/png, image/jpeg" onChange={(e) => setFile(e.target.files[0])} />
             <FaCloudUploadAlt className="text-4xl text-green-500 mb-2" />
             <p className="text-gray-600">Click to upload or drag and drop</p>
           </label>
 
-          {/* File Preview */}
-          {preview && (
-            <div className="mt-4">
-              <p className="text-sm font-medium">Selected File:</p>
-              <img
-                src={preview}
-                alt="Preview"
-                className="mt-2 rounded-lg shadow-md w-full max-h-40 object-cover"
-              />
-            </div>
-          )}
+          <textarea
+            className="w-full mt-4 p-2 border rounded-md"
+            placeholder="Add any additional information about allergies..."
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
 
-          {/* Upload Button */}
-          <button
-            onClick={handleUpload}
-            disabled={uploading || extractingText}
-            className={`mt-4 w-full py-2 rounded-md transition ${
-              uploading || extractingText ? "bg-gray-400 cursor-not-allowed" : "bg-green-500 text-white hover:bg-green-600"
-            }`}
-          >
-            {uploading ? "Uploading..." : extractingText ? "Extracting Text..." : "Upload Report"}
+          <button className="mt-2 w-full bg-blue-500 text-white py-2 rounded-md hover:bg-blue-600" onClick={updateUserNotes}>
+            Update Allergies
           </button>
 
-          {message && <p className="mt-4 text-sm text-center text-gray-700">{message}</p>}
+          <button onClick={handleUpload} className="mt-4 w-full bg-green-500 text-white py-2 rounded-md hover:bg-green-600">
+            {uploading ? "Uploading..." : "Upload Report"}
+          </button>
+
+          <p className="mt-4 text-sm text-center text-gray-700">{message}</p>
         </div>
 
-        {/* Analysis Section */}
-        <div>
-          <div className="bg-white shadow-md p-6 rounded-lg">
-            <h2 className="text-xl font-semibold mb-4">Progress Tracking</h2>
-            <Bar
-              data={{
-                labels: ["Report1", "Report2", "Report3"],
-                datasets: [
-                  { label: "Label 1", data: [30, 40, 25], backgroundColor: "#4CAF50" },
-                  { label: "Label 2", data: [35, 45, 20], backgroundColor: "#FFEB3B" },
-                  { label: "Label 3", data: [25, 35, 15], backgroundColor: "#8BC34A" },
-                ],
-              }}
-              options={{ responsive: true, plugins: { legend: { position: "top" } } }}
-            />
-          </div>
+        <div className="bg-white shadow-md p-6 rounded-lg">
+          <h2 className="text-xl font-semibold mb-4">Progress Tracking</h2>
+          <Bar
+            data={{
+              labels: progressData.map((d) => d.label),
+              datasets: progressData.length
+                ? Object.keys(progressData[0] || {})
+                    .filter((k) => k !== "label" && progressData.some((d) => d[k] !== null))
+                    .flatMap((key) => {
+                      const standardRanges = {
+                        TSH: 2.5,
+                        cholesterol: 162.5,
+                        hemoglobin: 15.5,
+                        sugar: 105,
+                      };
+
+                      return [
+                        { label: `${key} (Actual)`, data: progressData.map((d) => d[key]), backgroundColor: "rgba(54, 162, 235, 0.6)" },
+                        { label: `${key} (Standard)`, data: progressData.map((d) => (d[key] !== null ? standardRanges[key] : null)), backgroundColor: "rgba(255, 99, 132, 0.6)" },
+                      ];
+                    })
+                : [],
+            }}
+            
+          />
+          {/* Standard Values Table */}
+<h3 className="text-lg font-semibold mt-6">Standard Test Values</h3>
+<table className="w-full mt-4 border-collapse border border-gray-300">
+  <thead>
+    <tr className="bg-gray-100">
+      <th className="border border-gray-300 p-2">Test</th>
+      <th className="border border-gray-300 p-2">Standard Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {[
+      { name: "TSH", standard: 2.5 },
+      { name: "Cholesterol", standard: 162.5 },
+      { name: "Hemoglobin", standard: 15.5 },
+      { name: "Sugar", standard: 105 },
+    ].map((test) => (
+      <tr key={test.name} className="border border-gray-300">
+        <td className="border border-gray-300 p-2">{test.name}</td>
+        <td className="border border-gray-300 p-2">{test.standard}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+
         </div>
       </div>
     </div>
