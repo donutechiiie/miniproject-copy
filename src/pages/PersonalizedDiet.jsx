@@ -35,7 +35,12 @@ const Personalized = () => {
       if (mealError) {
         setError(mealError.message);
       } else {
-        setMeals(mealData);
+        // Remove scientific names from meal_ingredients
+        const cleanedMeals = mealData.map((meal) => ({
+          ...meal,
+          meal_ingredients: meal.meal_ingredients.replace(/\((.*?)\)/g, "").trim(),
+        }));
+        setMeals(cleanedMeals);
       }
 
       setLoading(false);
@@ -132,9 +137,6 @@ const Personalized = () => {
                         <li><strong>Iron:</strong> {nutritionInfo.iron_mg || "N/A"} mg</li>
                         <li><strong>Zinc:</strong> {nutritionInfo.zinc_mg || "N/A"} mg</li>
                       </ul>
-                      <p className="text-sm text-gray-500 mt-4">
-                        Created: {new Date(meal.created_at).toLocaleDateString()}
-                      </p>
                     </div>
                   );
                 })
