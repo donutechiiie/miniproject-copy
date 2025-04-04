@@ -160,7 +160,7 @@ export default function ReportUpload() {
         </div>
 
         <div className="bg-white shadow-md p-6 rounded-lg">
-          <h2 className="text-xl font-semibold mb-4">Progress Tracking</h2>
+          <h2 className="text-xl font-semibold mb-4">Nutrition Tracking</h2>
           <Bar
             data={{
               labels: progressData.map((d) => d.label),
