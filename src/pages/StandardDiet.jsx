@@ -28,25 +28,17 @@ const UserMeals = () => {
 
       const { data: mealData, error: mealError } = await supabase
         .from("standard_recommendation")
-        .select("meal_name, meal_ingredients, nutrition_total, meal_type, created_at")
+        .select("meal_name, meal_ingredients, nutrition_total, meal_type")
         .eq("user_id", userId)
         .order("meal_type", { ascending: true });
 
       if (mealError) {
         setError(mealError.message);
       } else {
-        mealData.forEach((meal) => {
-          console.log("Meal:", meal.meal_name);
-          console.log("Nutrition Data:", meal.nutrition_total); // Debugging log
-        });
-
         const cleanedMeals = mealData.map((meal) => ({
           ...meal,
           meal_ingredients: cleanIngredientNames(meal.meal_ingredients),
-          protein: parseNutrition(meal.nutrition_total, "protein"),
-          carbs: parseNutrition(meal.nutrition_total, "carbohydrate"),
-          fats: parseNutrition(meal.nutrition_total, "total_fat"),
-          iron: parseNutrition(meal.nutrition_total, "iron"), // Fetch Iron value
+          nutrition: parseNutrition(meal.nutrition_total),
         }));
         setMeals(cleanedMeals);
       }
@@ -71,79 +63,74 @@ const UserMeals = () => {
 
   const scrollLeft = (type) => {
     if (mealRefs[type]?.current) {
-      mealRefs[type].current.scrollBy({ left: -300, behavior: "smooth" });
+      mealRefs[type].current.scrollBy({ left: -380, behavior: "smooth" });
     }
   };
 
   const scrollRight = (type) => {
     if (mealRefs[type]?.current) {
-      mealRefs[type].current.scrollBy({ left: 300, behavior: "smooth" });
+      mealRefs[type].current.scrollBy({ left: 380, behavior: "smooth" });
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white to-gray-100 p-6 flex flex-col items-center">
-      <h2 className="text-4xl font-bold text-gray-900 text-center mb-4">
+    <div className="min-h-screen bg-gradient-to-b from-white to-gray-100 p-8 flex flex-col items-center">
+      <h2 className="text-4xl font-bold text-gray-900 text-center mb-6">
         Your Standard Diet Plan
       </h2>
-      <p className="text-md text-gray-500 text-center mb-8 max-w-2xl font-light">
-        A structured meal plan designed to provide balanced nutrition for a healthy lifestyle. 
+      <p className="text-md text-gray-500 text-center mb-10 max-w-2xl font-light">
+        A structured meal plan designed to provide balanced nutrition for a healthy lifestyle.
         Follow these meal recommendations to meet your daily dietary needs.
       </p>
 
       {["breakfast", "lunch", "dinner"].map((type) => (
-        <div key={type} className="w-full max-w-5xl text-center mb-12">
-          <h3 className="text-3xl font-bold text-blue-600 mb-4 capitalize">
+        <div key={type} className="w-[80%] max-w-[1400px] text-center mb-14">
+          <h3 className="text-3xl font-bold text-blue-600 mb-6 capitalize">
             {type}
           </h3>
 
           <div className="relative">
             <button
-              className="absolute left-0 top-1/2 transform -translate-y-1/2 p-3 bg-green-600 text-white rounded-full shadow-md hover:bg-green-700 transition z-10"
+              className="absolute left-2 top-1/2 transform -translate-y-1/2 p-4 bg-green-600 text-white rounded-full shadow-lg hover:bg-green-700 transition z-10"
               onClick={() => scrollLeft(type)}
             >
-              <FaArrowLeft />
+              <FaArrowLeft size={20} />
             </button>
 
             <div
               ref={mealRefs[type]}
-              className="flex gap-6 overflow-x-auto snap-x snap-mandatory scroll-smooth px-4 hide-scrollbar justify-center"
+              className="flex gap-6 overflow-x-auto snap-x snap-mandatory scroll-smooth px-8 hide-scrollbar"
+              style={{ scrollPaddingLeft: "8px" }} // Ensures first card is fully visible
             >
               {categorizedMeals[type].map((meal) => (
                 <div
                   key={meal.id}
-                  className="w-80 min-w-[250px] bg-white shadow-lg rounded-2xl p-5 snap-center border border-gray-200"
+                  className="w-[380px] min-w-[380px] bg-white shadow-xl rounded-2xl p-6 snap-center border border-gray-300"
                 >
-                  <h3 className="text-lg font-semibold text-gray-800">
+                  <h3 className="text-xl font-semibold text-gray-800 mb-3">
                     {meal.meal_name}
                   </h3>
-                  <p className="text-gray-600 mt-2">
+                  <p className="text-gray-600 mb-4">
                     <span className="font-bold">Ingredients:</span> {meal.meal_ingredients}
                   </p>
-                  <p className="text-gray-600 mt-2">
-                    <span className="font-bold">Protein:</span> {meal.protein}g
-                  </p>
-                  <p className="text-gray-600 mt-2">
-                    <span className="font-bold">Carbs:</span> {meal.carbs}g
-                  </p>
-                  <p className="text-gray-600 mt-2">
-                    <span className="font-bold">Fats:</span> {meal.fats}g
-                  </p>
-                  <p className="text-gray-600 mt-2">
-                    <span className="font-bold">Iron:</span> {meal.iron}mg
-                  </p>
-                  <p className="text-sm text-gray-500 mt-4">
-                    Created: {new Date(meal.created_at).toLocaleDateString()}
-                  </p>
+
+                  {/* Render only available nutrition values */}
+                  {Object.entries(meal.nutrition).map(([key, value]) =>
+                    value !== "N/A" && value !== "0mg" && value !== "0g" ? (
+                      <p className="text-gray-700 text-lg" key={key}>
+                        <span className="font-bold capitalize">{key}:</span> {value}
+                      </p>
+                    ) : null
+                  )}
                 </div>
               ))}
             </div>
 
             <button
-              className="absolute right-0 top-1/2 transform -translate-y-1/2 p-3 bg-green-600 text-white rounded-full shadow-md hover:bg-green-700 transition z-10"
+              className="absolute right-2 top-1/2 transform -translate-y-1/2 p-4 bg-green-600 text-white rounded-full shadow-lg hover:bg-green-700 transition z-10"
               onClick={() => scrollRight(type)}
             >
-              <FaArrowRight />
+              <FaArrowRight size={20} />
             </button>
           </div>
         </div>
@@ -153,20 +140,23 @@ const UserMeals = () => {
 };
 
 // 🛠 Function to parse nutrition values correctly
-const parseNutrition = (nutrition, key) => {
+const parseNutrition = (nutrition) => {
   try {
     const parsed = typeof nutrition === "string" ? JSON.parse(nutrition) : nutrition;
-    if (!parsed) return "N/A";
+    if (!parsed) return {};
 
-    // Handle different possible key names for Iron
-    if (key === "iron") {
-      return parsed["iron"] ?? parsed["iron_mg"] ?? parsed["Fe"] ?? "N/A";
-    }
-
-    return parsed[key] ?? "N/A";
+    return {
+      Protein: parsed["protein"] ?? "N/A",
+      Carbs: parsed["carbohydrate"] ?? "N/A",
+      Fats: parsed["total_fat"] ?? "N/A",
+      Iron: parsed["iron"] ?? parsed["iron_mg"] ?? parsed["Fe"] ?? "N/A",
+      Fiber: parsed["fiber"] ?? "N/A",
+      Sugar: parsed["sugar"] ?? "N/A",
+      Sodium: parsed["sodium"] ?? "N/A",
+    };
   } catch (error) {
     console.error("Error parsing nutrition:", error);
-    return "N/A";
+    return {};
   }
 };
 
