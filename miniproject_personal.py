@@ -8,6 +8,7 @@ import random
 import json
 from flask_cors import CORS
 from datetime import datetime
+import re
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
@@ -31,10 +32,10 @@ PERSONALIZED_ADJUSTMENTS = {
 
 # Normal ranges (aligned with UserTable's gender field)
 NORMAL_RANGES = {
-    'cholesterol': {'min': 125, 'max': 200, 'unit': 'mg/dl'},  # Both male/female
+    'cholesterol': {'min': 125, 'max': 200, 'unit': 'mg/dl'},
     'hemoglobin': {'male': {'min': 13.5, 'max': 17.5, 'unit': 'g/dl'},
                    'female': {'min': 12.0, 'max': 15.5, 'unit': 'g/dl'}},
-    'sugar': {'min': 70, 'max': 99, 'unit': 'mg/dl'}  # Both male/female
+    'sugar': {'min': 70, 'max': 99, 'unit': 'mg/dl'}
 }
 
 MEAL_TYPES = ['breakfast', 'lunch', 'dinner']
@@ -53,15 +54,36 @@ for table in tables:
     df_name = f"{table}_df"
     dataframes[df_name] = pd.DataFrame(response.data)
 
-# Convert preloaded data to the original dictionary format
+# Convert preloaded data to dictionary format, handling missing minerals data
 food_data = {}
 for _, row in dataframes['nutritionaldata_df'].iterrows():
     food_code = row['food_code']
     food_data[food_code] = {'food_name': row['food_name'] or f"Unnamed_{food_code}"}
-    for df_name, df in dataframes.items():
-        if df_name != "nutritionaldata_df":
-            food_data[food_code].update({k: v for k, v in df[df['food_code'] == food_code].iloc[0].to_dict().items() if k not in ['food_code', 'food_name', 'num_regions'] and v is not None})
-print(f"Data loaded in {time.time() - start_time:.2f} seconds")
+    
+    # Add nutritional data
+    food_data[food_code].update({
+        k: v for k, v in row.to_dict().items() 
+        if k not in ['food_code', 'food_name', 'num_regions'] and v is not None
+    })
+
+# Merge with minerals_trace_elements where available, set missing values to None
+minerals_df = dataframes['minerals_trace_elements_df']
+for food_code in food_data:
+    minerals_row = minerals_df[minerals_df['food_code'] == food_code]
+    if not minerals_row.empty:
+        minerals_dict = minerals_row.iloc[0].to_dict()
+        food_data[food_code].update({
+            k: v for k, v in minerals_dict.items() 
+            if k not in ['food_code', 'food_name', 'num_regions'] and v is not None
+        })
+    else:
+        # Explicitly set mineral fields to None if no match
+        mineral_fields = ['iron_mg']  # Add other mineral fields as needed
+        for field in mineral_fields:
+            if field not in food_data[food_code]:
+                food_data[food_code][field] = None
+
+print(f"Data loaded in {time.time() - start_time:.2f} seconds. Loaded {len(food_data)} food items.")
 
 # Fetch data for a specific user
 def get_user_data(user_id):
@@ -85,7 +107,6 @@ def get_user_report(user_id):
         if response.data:
             text = response.data[0]['extracted_text']
             if text:
-                # Parse the text (assuming format from your image)
                 cholesterol = float(re.search(r'cholesterol (\d+\.?\d*) mg/dl', text, re.IGNORECASE).group(1)) if re.search(r'cholesterol (\d+\.?\d*) mg/dl', text, re.IGNORECASE) else None
                 sugar = float(re.search(r'sugar (\d+\.?\d*) mg/dl', text, re.IGNORECASE).group(1)) if re.search(r'sugar (\d+\.?\d*) mg/dl', text, re.IGNORECASE) else None
                 hemoglobin = float(re.search(r'hemoglobin (\d+\.?\d*) g/dl', text, re.IGNORECASE).group(1)) if re.search(r'hemoglobin (\d+\.?\d*) g/dl', text, re.IGNORECASE) else None
@@ -94,7 +115,7 @@ def get_user_report(user_id):
         print(f"Error fetching report for user {user_id}: {e}")
     return None
 
-# Determine health status based on report and gender (uses UserTable's gender)
+# Determine health status based on report and gender
 def get_health_status(report, gender):
     status = {}
     if report and report['cholesterol'] is not None:
@@ -123,7 +144,7 @@ def train_decision_tree(food_data, daily_nutrients):
     feature_names = ['carbohydrate', 'protein', 'total_fat', 'iron_mg']
     
     for food_code, nutrients in food_data.items():
-        features = [nutrients.get(feat, 0) for feat in feature_names]
+        features = [nutrients.get(feat, 0) if nutrients.get(feat) is not None else 0 for feat in feature_names]
         X.append(features)
         balanced_count = sum(1 for feat, val in zip(feature_names, features) if val > 0 and daily_nutrients[feat] * 0.1 <= val <= daily_nutrients[feat] * 0.5)
         y.append(1 if balanced_count >= 2 else 0)
@@ -140,7 +161,7 @@ def train_decision_tree(food_data, daily_nutrients):
 def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_foods, daily_nutrients):
     available_foods = {
         k: v for k, v in food_data.items() 
-        if k not in used_ingredients and v['food_name'] not in restricted_foods
+        if k not in used_ingredients and v['food_name'].lower() not in [r.lower() for r in restricted_foods]
     }
     if len(available_foods) < 2:
         return None
@@ -151,7 +172,7 @@ def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_fo
     for food_code in meal_ingredients:
         nutrients = food_data[food_code]
         for key, value in nutrients.items():
-            if key != 'food_name' and isinstance(value, (int, float)):
+            if key != 'food_name' and isinstance(value, (int, float)) and value is not None:
                 total_nutrients[key] = total_nutrients.get(key, 0) + value
     
     X_test = [total_nutrients.get(feat, 0) for feat in feature_names]
@@ -178,6 +199,16 @@ def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_fo
         },
         'ingredient_codes': meal_ingredients
     }
+
+# Delete existing recommendations for a user
+def delete_existing_recommendations(user_ids):
+    for user_id in user_ids:
+        for meal_type in MEAL_TYPES:
+            try:
+                supabase.table('standard_recommendation').delete().eq('user_id', user_id).eq('meal_type', meal_type).execute()
+                print(f"Deleted existing recommendations for user {user_id} and meal type {meal_type}.")
+            except Exception as e:
+                print(f"Error deleting existing recommendations for user {user_id}: {e}")
 
 # Recommend meals for a user, respecting their restrictions and health status
 def recommend_meals_for_user(user_id, food_data, clf, feature_names, restricted_foods, daily_nutrients):
@@ -236,7 +267,7 @@ def recommend_meals_for_user(user_id, food_data, clf, feature_names, restricted_
                     'nutrition_total': json.loads(fallback_rec['nutrition_total']),
                     'ingredient_codes': [code for code in food_data if food_data[code]['food_name'] in fallback_rec['meal_ingredients'].split(', ')]
                 }
-                if not any(ingredient in restricted_foods for ingredient in fallback_meal['meal_ingredients']):
+                if not any(ingredient.lower() in [r.lower() for r in restricted_foods] for ingredient in fallback_meal['meal_ingredients']):
                     combination_key = tuple(sorted(fallback_meal['ingredient_codes']))
                     if combination_key not in used_combinations:
                         rec = {
@@ -316,7 +347,7 @@ def generate_personalized_recommendations():
     for meal_type in MEAL_TYPES:
         all_recommendations[meal_type] = [
             {
-                'option': i + 1,
+                Chomsky: i + 1,
                 'name': option['meal_name'],
                 'ingredients': option['meal_ingredients'].split(', '),
                 'nutritional_totals': json.loads(option['nutrition_total'])
