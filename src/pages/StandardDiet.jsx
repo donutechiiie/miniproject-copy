@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { FaArrowLeft, FaArrowRight } from "react-icons/fa";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../supabaseClient"; // Adjust path if needed
 
 const UserMeals = () => {
   const [meals, setMeals] = useState([]);
@@ -28,7 +28,7 @@ const UserMeals = () => {
 
       const { data: mealData, error: mealError } = await supabase
         .from("standard_recommendation")
-        .select("id, meal_name, meal_ingredients, nutrition_total, meal_type")
+        .select("meal_name, meal_ingredients, nutrition_total, meal_type")
         .eq("user_id", userId)
         .order("meal_type", { ascending: true });
 
@@ -100,7 +100,7 @@ const UserMeals = () => {
             <div
               ref={mealRefs[type]}
               className="flex gap-6 overflow-x-auto snap-x snap-mandatory scroll-smooth px-8 hide-scrollbar"
-              style={{ scrollPaddingLeft: "8px" }}
+              style={{ scrollPaddingLeft: "8px" }} // Ensures first card is fully visible
             >
               {categorizedMeals[type].map((meal) => (
                 <div
@@ -113,8 +113,10 @@ const UserMeals = () => {
                   <p className="text-gray-600 mb-4">
                     <span className="font-bold">Ingredients:</span> {meal.meal_ingredients}
                   </p>
+
+                  {/* Render only available nutrition values */}
                   {Object.entries(meal.nutrition).map(([key, value]) =>
-                    value && value !== "N/A" && value !== "0mg" && value !== "0g" ? (
+                    value !== "N/A" && value !== "0mg" && value !== "0g" ? (
                       <p className="text-gray-700 text-lg" key={key}>
                         <span className="font-bold capitalize">{key}:</span> {value}
                       </p>
@@ -137,34 +139,7 @@ const UserMeals = () => {
   );
 };
 
-// ✅ Clean scientific names like "Carrot (Daucus carota)" -> "Carrot"
-const cleanIngredientNames = (ingredients) => {
-  try {
-    const parsed = typeof ingredients === "string" ? JSON.parse(ingredients) : ingredients;
-
-    if (!Array.isArray(parsed)) {
-      return typeof ingredients === "string"
-        ? ingredients.replace(/\s*\(.*?\)/g, "").trim()
-        : "Unknown Ingredients";
-    }
-
-    return parsed
-      .map((item) =>
-        typeof item === "string"
-          ? item.replace(/\s*\(.*?\)/g, "").trim()
-          : ""
-      )
-      .filter(Boolean)
-      .join(", ");
-  } catch (error) {
-    console.warn("Ingredient parse error:", error);
-    return typeof ingredients === "string"
-      ? ingredients.replace(/\s*\(.*?\)/g, "").trim()
-      : "Unknown Ingredients";
-  }
-};
-
-// ✅ Keep units from the original JSON if present
+// 🛠 Function to parse nutrition values correctly
 const parseNutrition = (nutrition) => {
   try {
     const parsed = typeof nutrition === "string" ? JSON.parse(nutrition) : nutrition;
@@ -182,6 +157,16 @@ const parseNutrition = (nutrition) => {
   } catch (error) {
     console.error("Error parsing nutrition:", error);
     return {};
+  }
+};
+
+// 🛠 Function to clean ingredient names (remove scientific names)
+const cleanIngredientNames = (ingredients) => {
+  try {
+    const parsed = typeof ingredients === "string" ? JSON.parse(ingredients) : ingredients;
+    return parsed.map((item) => item.split(" (")[0]).join(", "); // Extract common name
+  } catch {
+    return "Unknown Ingredients";
   }
 };
 
