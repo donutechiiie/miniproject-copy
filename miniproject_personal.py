@@ -2,291 +2,274 @@ from flask import Flask, request, jsonify
 import pandas as pd
 import numpy as np
 from supabase import create_client, Client
-from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
 import time
-import re
 import random
 import json
+from flask_cors import CORS
+from datetime import datetime
 
 app = Flask(__name__)
-from flask_cors import CORS
 CORS(app)  # Enable CORS for React frontend
 
-# Supabase credentials
-url = "https://jujxoskixfadyvrxlaru.supabase.co"
-key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1anhvc2tpeGZhZHl2cnhsYXJ1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjM4MjI5NSwiZXhwIjoyMDU3OTU4Mjk1fQ.Ka4RjOSpSr5ODKpklgvFJkx9iNPxgqwIMFLbQU5-NMo"
-supabase: Client = create_client(url, key)
+# Supabase configuration
+SUPABASE_URL = "https://jujxoskixfadyvrxlaru.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1anhvc2tpeGZhZHl2cnhsYXJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIzODIyOTUsImV4cCI6MjA1Nzk1ODI5NX0.WcDFgHAMGbsksGUto44U4ke33yz_hONETzQX3U6-VcQ"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Base nutritional targets
-base_targets = {
-    'breakfast': {
-        'carbohydrate': 90, 'protein': 30, 'total_fat': 24, 'dietary_fibre_total': 10, 'total_ascorbic_acid': 20,
-        'calcium_mg': 300, 'iron_mg': 4, 'vite': 5, 'linoleic_c18_2n6': 5, 'alpha_linolenic_c18_3n3': 0.5,
-        'lys': 1.5, 'met': 0.5, 'total_folates': 100, 'beta_carotene': 2000, 'magnesium_mg': 100, 'zinc_mg': 3,
-        'total_free_sugars': 20, 'total_polyphenols': 50
-    },
-    'lunch': {
-        'carbohydrate': 120, 'protein': 40, 'total_fat': 32, 'dietary_fibre_total': 15, 'total_ascorbic_acid': 30,
-        'calcium_mg': 400, 'iron_mg': 6, 'vite': 7, 'linoleic_c18_2n6': 7, 'alpha_linolenic_c18_3n3': 0.7,
-        'lys': 2.0, 'met': 0.7, 'total_folates': 150, 'beta_carotene': 3000, 'magnesium_mg': 150, 'zinc_mg': 4,
-        'total_free_sugars': 25, 'total_polyphenols': 75
-    },
-    'dinner': {
-        'carbohydrate': 90, 'protein': 30, 'total_fat': 24, 'dietary_fibre_total': 10, 'total_ascorbic_acid': 20,
-        'calcium_mg': 300, 'iron_mg': 4, 'vite': 5, 'linoleic_c18_2n6': 5, 'alpha_linolenic_c18_3n3': 0.5,
-        'lys': 1.5, 'met': 0.5, 'total_folates': 100, 'beta_carotene': 2000, 'magnesium_mg': 100, 'zinc_mg': 3,
-        'total_free_sugars': 20, 'total_polyphenols': 50
-    }
+# Nutritional requirements and personalization factors
+DAILY_NUTRIENTS = {
+    'carbohydrate': 300,  # grams (normal baseline)
+    'protein': 50,        # grams
+    'total_fat': 70,      # grams
+    'iron_mg': 18,        # mg
+}
+PERSONALIZED_ADJUSTMENTS = {
+    'high_sugar': {'carbohydrate': 0.7},  # Reduce carbs by 30% for high sugar
+    'high_cholesterol': {'total_fat': 0.7},  # Reduce fat by 30% for high cholesterol
 }
 
-# Health condition adjustments
-health_adjustments = {
-    'high_glucose': {'carbohydrate': 0.6, 'total_free_sugars': 0.4, 'dietary_fibre_total': 1.3, 'total_polyphenols': 1.2},
-    'low_iron': {'iron_mg': 1.5, 'total_ascorbic_acid': 1.2},
-    'high_cholesterol': {'total_fat': 0.5, 'linoleic_c18_2n6': 1.3, 'dietary_fibre_total': 1.2},
-    'low_vitamin_a': {'beta_carotene': 1.5},
-    'low_folate': {'total_folates': 1.5},
-    'low_magnesium': {'magnesium_mg': 1.5},
-    'low_zinc': {'zinc_mg': 1.5},
-    'high_blood_pressure': {'magnesium_mg': 1.2, 'calcium_mg': 1.2, 'total_fat': 0.8},
-    'low_hemoglobin': {'iron_mg': 1.5, 'total_folates': 1.5, 'total_ascorbic_acid': 1.2}
+# Normal ranges (aligned with UserTable's gender field)
+NORMAL_RANGES = {
+    'cholesterol': {'min': 125, 'max': 200, 'unit': 'mg/dl'},  # Both male/female
+    'hemoglobin': {'male': {'min': 13.5, 'max': 17.5, 'unit': 'g/dl'},
+                   'female': {'min': 12.0, 'max': 15.5, 'unit': 'g/dl'}},
+    'sugar': {'min': 70, 'max': 99, 'unit': 'mg/dl'}  # Both male/female
 }
 
-# Fetch and preprocess food data at startup
-print("Fetching and merging data...")
+MEAL_TYPES = ['breakfast', 'lunch', 'dinner']
+MEALS_PER_TYPE = 3  # Fixed to 3 meals per type
+used_meal_names = set()  # To ensure unique meal names
+user_meal_combinations = {}  # Dictionary to track combinations per user
+all_recommendations = []  # Store all recommendations globally
+
+# Fetch and preprocess data once at startup
+print("Loading data...")
 start_time = time.time()
-tables = {
-    "nutritionaldata": "nutritional_df", "watersolublevitamins": "vitamins_df", "amino_acid_profile": "amino_df",
-    "carotenoids": "carotenoids_df", "edibleoils": "oils_df", "fat_soluble_vitamins": "fat_vitamins_df",
-    "fatty_acid_profile": "fatty_acids_df", "minerals_trace_elements": "minerals_df",
-    "oligosaccharides_phytosterols": "oligo_df", "organic_acids": "organic_df", "polyphenols": "polyphenols_df",
-    "starch_and_sugars": "starch_df"
-}
+tables = ['nutritionaldata', 'minerals_trace_elements']
 dataframes = {}
-for table, df_name in tables.items():
-    try:
-        response = supabase.table(table).select("*").execute()
-        dataframes[df_name] = pd.DataFrame(response.data)
-    except Exception as e:
-        print(f"Error fetching {table}: {e}")
-        dataframes[df_name] = pd.DataFrame()
+for table in tables:
+    response = supabase.table(table).select("*").execute()
+    df_name = f"{table}_df"
+    dataframes[df_name] = pd.DataFrame(response.data)
 
-combined_df = dataframes["nutritional_df"]
-for df_name, df in dataframes.items():
-    if df_name != "nutritional_df" and not df.empty:
-        combined_df = combined_df.merge(df, on='food_code', how='left', suffixes=('', f'_{df_name}'))
-combined_df.fillna(0, inplace=True)
-print(f"Data fetched and merged in {time.time() - start_time:.2f} seconds, Shape: {combined_df.shape}")
+# Convert preloaded data to the original dictionary format
+food_data = {}
+for _, row in dataframes['nutritionaldata_df'].iterrows():
+    food_code = row['food_code']
+    food_data[food_code] = {'food_name': row['food_name'] or f"Unnamed_{food_code}"}
+    for df_name, df in dataframes.items():
+        if df_name != "nutritionaldata_df":
+            food_data[food_code].update({k: v for k, v in df[df['food_code'] == food_code].iloc[0].to_dict().items() if k not in ['food_code', 'food_name', 'num_regions'] and v is not None})
+print(f"Data loaded in {time.time() - start_time:.2f} seconds")
 
-# Fetch user data and blood reports
+# Fetch data for a specific user
 def get_user_data(user_id):
     try:
-        users_response = supabase.table("UserTable").select("auth_uid, notes").eq("auth_UID", user_id).execute()
-        reports_response = supabase.table("reports").select("auth_uid, extracted_text").eq("auth_UID", user_id).execute()
+        response = supabase.table('UserTable').select('auth_uid, notes, gender').eq('auth_uid', user_id).execute()
+        if response.data:
+            row = response.data[0]
+            return {
+                'restrictions': row['notes'] if row['notes'] else [],
+                'gender': row['gender'] if row['gender'] else 'unknown'
+            }
+        return {'restrictions': [], 'gender': 'unknown'}
     except Exception as e:
         print(f"Error fetching user data for {user_id}: {e}")
-        return {'restrictions': [], 'reports': []}
-    
-    user_data = {'restrictions': [], 'reports': []}
-    if users_response.data:
-        notes = users_response.data[0].get('notes') or {}
-        restrictions = notes.get('restrictions', []) if isinstance(notes, dict) else []
-        user_data['restrictions'] = [r.lower() for r in restrictions if isinstance(r, str)]
-    for report in reports_response.data:
-        if report['extracted_text']:
-            user_data['reports'].append(report['extracted_text'])
-    return user_data
+        return {'restrictions': [], 'gender': 'unknown'}
 
-# Parse blood report text with hemoglobin
-def parse_blood_report(text):
-    conditions = {}
-    patterns = {
-        'glucose': (r'glucose\D*(\d+\.?\d*)', 130, 'high_glucose', True),
-        'iron': (r'iron\D*(\d+\.?\d*)', 12, 'low_iron', False),
-        'cholesterol': (r'cholesterol\D*(\d+\.?\d*)', 200, 'high_cholesterol', True),
-        'folate': (r'folate\D*(\d+\.?\d*)', 400, 'low_folate', False),
-        'magnesium': (r'magnesium\D*(\d+\.?\d*)', 1.7, 'low_magnesium', False),
-        'zinc': (r'zinc\D*(\d+\.?\d*)', 0.7, 'low_zinc', False),
-        'vitamin a': (r'vitamin a\D*(\d+\.?\d*)', 20, 'low_vitamin_a', False),
-        'blood pressure': (r'blood pressure\D*(\d+/\d+)', '140/90', 'high_blood_pressure', True),
-        'hemoglobin': (r'haemoglobin\D*(\d+\.?\d*)\s*g/dl', 12.5, 'low_hemoglobin', False)
-    }
-    for key, (pattern, threshold, condition, is_high) in patterns.items():
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            value = match.group(1)
-            if key == 'blood pressure':
-                sys, dia = map(int, value.split('/'))
-                if sys > int(threshold.split('/')[0]) or dia > int(threshold.split('/')[1]):
-                    conditions[condition] = True
-            else:
-                value = float(value)
-                if (is_high and value > threshold) or (not is_high and value < threshold):
-                    conditions[condition] = True
-    return conditions
+# Fetch and parse the latest report for a user
+def get_user_report(user_id):
+    try:
+        response = supabase.table('reports').select('extracted_text').eq('auth_uid', user_id).order('created_at', desc=True).limit(1).execute()
+        if response.data:
+            text = response.data[0]['extracted_text']
+            if text:
+                # Parse the text (assuming format from your image)
+                cholesterol = float(re.search(r'cholesterol (\d+\.?\d*) mg/dl', text, re.IGNORECASE).group(1)) if re.search(r'cholesterol (\d+\.?\d*) mg/dl', text, re.IGNORECASE) else None
+                sugar = float(re.search(r'sugar (\d+\.?\d*) mg/dl', text, re.IGNORECASE).group(1)) if re.search(r'sugar (\d+\.?\d*) mg/dl', text, re.IGNORECASE) else None
+                hemoglobin = float(re.search(r'hemoglobin (\d+\.?\d*) g/dl', text, re.IGNORECASE).group(1)) if re.search(r'hemoglobin (\d+\.?\d*) g/dl', text, re.IGNORECASE) else None
+                return {'cholesterol': cholesterol, 'sugar': sugar, 'hemoglobin': hemoglobin}
+    except Exception as e:
+        print(f"Error fetching report for user {user_id}: {e}")
+    return None
 
-# Adjust targets based on health conditions
-def adjust_targets(base_targets, conditions):
-    adjusted = {meal: targets.copy() for meal, targets in base_targets.items()}
-    for meal_type in adjusted:
-        for condition, adjustments in health_adjustments.items():
-            if conditions.get(condition, False):
-                for nutrient, factor in adjustments.items():
-                    adjusted[meal_type][nutrient] = adjusted[meal_type].get(nutrient, 0) * factor
+# Determine health status based on report and gender (uses UserTable's gender)
+def get_health_status(report, gender):
+    status = {}
+    if report and report['cholesterol'] is not None:
+        status['cholesterol'] = 'high' if report['cholesterol'] > NORMAL_RANGES['cholesterol']['max'] else 'normal'
+    if report and report['sugar'] is not None:
+        status['sugar'] = 'high' if report['sugar'] > NORMAL_RANGES['sugar']['max'] else 'normal'
+    if report and report['hemoglobin'] is not None:
+        hb_range = NORMAL_RANGES['hemoglobin']['male' if gender.lower() == 'male' else 'female']
+        status['hemoglobin'] = 'low' if report['hemoglobin'] < hb_range['min'] else 'high' if report['hemoglobin'] > hb_range['max'] else 'normal'
+    return status
+
+# Adjust daily nutrients based on health status
+def adjust_nutrients(base_nutrients, health_status):
+    adjusted = base_nutrients.copy()
+    for condition, factors in PERSONALIZED_ADJUSTMENTS.items():
+        if health_status.get('sugar') == 'high' and condition == 'high_sugar':
+            adjusted['carbohydrate'] = int(base_nutrients['carbohydrate'] * factors['carbohydrate'])
+        if health_status.get('cholesterol') == 'high' and condition == 'high_cholesterol':
+            adjusted['total_fat'] = int(base_nutrients['total_fat'] * factors['total_fat'])
     return adjusted
 
-# Train logistic regression with relaxed criteria
-def train_logistic_regression(df, meal_type, targets):
-    features = list(targets[meal_type].keys())
-    X = df[features].values
-    y = np.array([
-        1 if sum(df.iloc[i][n] >= 0 and df.iloc[i][n] <= targets[meal_type][n] * 1.2 for n in features) >= len(features) * 0.7
-        else 0 for i in range(len(df))
-    ])
-    if sum(y) == 0:
-        print(f"Warning: No foods meet criteria for {meal_type}. Using fallback labeling.")
-        y = np.array([
-            1 if sum(df.iloc[i][n] <= targets[meal_type][n] * 1.5 for n in features) >= len(features) * 0.5
-            else 0 for i in range(len(df))
-        ])
-    if sum(y) == 0:
-        print(f"Warning: Still no suitable foods for {meal_type}. Using extreme fallback.")
-        scores = np.array([
-            sum(abs(df.iloc[i][n] - targets[meal_type][n]) / targets[meal_type][n] for n in features)
-            for i in range(len(df))
-        ])
-        threshold = np.percentile(scores, 10)
-        y = np.array([1 if scores[i] <= threshold else 0 for i in range(len(df))])
-    clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
+# Decision tree to classify if a meal meets nutritional balance with adjusted targets
+def train_decision_tree(food_data, daily_nutrients):
+    X = []
+    y = []
+    feature_names = ['carbohydrate', 'protein', 'total_fat', 'iron_mg']
+    
+    for food_code, nutrients in food_data.items():
+        features = [nutrients.get(feat, 0) for feat in feature_names]
+        X.append(features)
+        balanced_count = sum(1 for feat, val in zip(feature_names, features) if val > 0 and daily_nutrients[feat] * 0.1 <= val <= daily_nutrients[feat] * 0.5)
+        y.append(1 if balanced_count >= 2 else 0)
+    
+    if not X:
+        print("ERROR: No training data for decision tree.")
+        return None, feature_names
+    
+    clf = DecisionTreeClassifier(random_state=42)
     clf.fit(X, y)
-    return clf
+    return clf, feature_names
 
-# Recommend personalized meals
-def recommend_meals_lr(meal_type, df, restrictions, targets, num_meals=3):
-    if restrictions:
-        pattern = '|'.join([fr'\b{restr}\b' for restr in restrictions] + [fr'{restr}.*' for restr in restrictions])
-        filtered_df = df[~df['food_name_nutri'].str.lower().str.contains(pattern, na=False, case=False)]
-    else:
-        filtered_df = df.copy()
-
-    clf = train_logistic_regression(filtered_df, meal_type, targets)
-    features = list(targets[meal_type].keys())
-    X = filtered_df[features].values
-    predictions = clf.predict(X)
-    suitable_foods = filtered_df[predictions == 1].sample(frac=1, random_state=42).reset_index(drop=True)
-
-    if len(suitable_foods) == 0:
-        return [{'meal': [], 'totals': {k: 0 for k in targets[meal_type]}}] * num_meals
-
-    meal_options = []
-    used_meal_sets = set()
-    min_targets = {k: v * 0.7 for k, v in targets[meal_type].items()}
-    max_targets = {k: v * 1.2 for k, v in targets[meal_type].items()}
-
-    for meal_num in range(num_meals):
-        meal = []
-        totals = {key: 0 for key in targets[meal_type].keys()}
-        shuffled_foods = suitable_foods.sample(frac=1, random_state=meal_num * 42).reset_index(drop=True)
-        idx = 0
-
-        while idx < len(shuffled_foods) and not all(totals[n] >= min_targets[n] for n in totals):
-            row = shuffled_foods.iloc[idx]
-            food = row.get('food_name_nutri') or row.get('food_name')
-            temp_totals = totals.copy()
-            for nutrient in totals:
-                temp_totals[nutrient] += row.get(nutrient, 0)
-            if all(temp_totals[n] <= max_targets[n] for n in temp_totals):
-                meal.append(food)
-                totals = temp_totals
-            idx += 1
-
-        meal_tuple = tuple(sorted(meal))
-        if meal_tuple and meal_tuple not in used_meal_sets:
-            used_meal_sets.add(meal_tuple)
-            meal_options.append({'meal': meal, 'totals': totals})
-
-        if len(meal_options) <= meal_num and idx >= len(shuffled_foods):
-            meal = suitable_foods['food_name_nutri'].iloc[:min(3, len(suitable_foods))].tolist()
-            totals = suitable_foods[features].iloc[:min(3, len(suitable_foods))].sum().to_dict()
-            meal_tuple = tuple(sorted(meal))
-            if meal_tuple not in used_meal_sets:
-                used_meal_sets.add(meal_tuple)
-                meal_options.append({'meal': meal, 'totals': totals})
-
-    while len(meal_options) < num_meals:
-        meal = meal_options[0]['meal'][:2] + [suitable_foods['food_name_nutri'].iloc[min(len(meal_options), len(suitable_foods)-1)]]
-        totals = suitable_foods[features].iloc[:3].sum().to_dict()
-        meal_tuple = tuple(sorted(meal))
-        if meal_tuple not in used_meal_sets:
-            used_meal_sets.add(meal_tuple)
-            meal_options.append({'meal': meal, 'totals': totals})
-
-    return meal_options[:num_meals]
-
-# Function to generate a creative meal name with main ingredients
-def generate_meal_name(user_id, meal_type, ingredients):
-    if not ingredients:
-        return f"{meal_type.capitalize()} Placeholder"
+# Generate a unique meal, respecting user restrictions and health status
+def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_foods, daily_nutrients):
+    available_foods = {
+        k: v for k, v in food_data.items() 
+        if k not in used_ingredients and v['food_name'] not in restricted_foods
+    }
+    if len(available_foods) < 2:
+        return None
     
-    def simplify_name(name):
-        return re.split(r'[,(]', name)[0].strip()
+    meal_ingredients = random.sample(list(available_foods.keys()), min(3, len(available_foods)))
+    total_nutrients = {}
     
-    main_ingredients = [simplify_name(ingredients[i]) for i in range(min(2, len(ingredients)))]
-    base_name = f"{meal_type.capitalize()} {main_ingredients[0]} & {main_ingredients[1]}"
+    for food_code in meal_ingredients:
+        nutrients = food_data[food_code]
+        for key, value in nutrients.items():
+            if key != 'food_name' and isinstance(value, (int, float)):
+                total_nutrients[key] = total_nutrients.get(key, 0) + value
     
-    try:
-        response = supabase.table("personal_recommendation").select("meal_name")\
-            .eq("user_id", user_id)\
-            .eq("meal_type", meal_type)\
-            .eq("meal_name", base_name)\
-            .execute()
-        if not response.data:
-            return base_name
-    except:
-        return base_name
+    X_test = [total_nutrients.get(feat, 0) for feat in feature_names]
+    is_balanced = clf.predict([X_test])[0] if clf else True
     
-    descriptors = ['Delight', 'Feast', 'Glow']
-    for descriptor in descriptors:
-        new_name = f"{base_name} {descriptor}"
-        try:
-            response = supabase.table("personal_recommendation").select("meal_name")\
-                .eq("user_id", user_id)\
-                .eq("meal_type", meal_type)\
-                .eq("meal_name", new_name)\
-                .execute()
-            if not response.data:
-                return new_name
-        except:
-            return new_name
+    if not is_balanced:
+        return None
     
-    return f"{base_name} {random.randint(1, 100)}"
+    base_name = random.choice(['Mix', 'Combo', 'Plate'])
+    ingredient_name = food_data[meal_ingredients[0]]['food_name'].split()[0]
+    meal_name = f"{ingredient_name} {base_name} {random.randint(1, 100)}"
+    while meal_name in used_meal_names:
+        meal_name = f"{ingredient_name} {base_name} {random.randint(1, 100)}"
+    used_meal_names.add(meal_name)
+    
+    return {
+        'meal_name': meal_name,
+        'meal_ingredients': [food_data[code]['food_name'] for code in meal_ingredients],
+        'nutrition_total': {
+            'carbohydrate': total_nutrients.get('carbohydrate', 0),
+            'protein': total_nutrients.get('protein', 0),
+            'total_fat': total_nutrients.get('total_fat', 0),
+            'iron_mg': total_nutrients.get('iron_mg', 0)
+        },
+        'ingredient_codes': meal_ingredients
+    }
 
-# Function to delete and insert recommendations into Supabase
-def delete_and_insert_recommendations(user_id, meal_type, options):
-    for option in options:
-        meal_name = generate_meal_name(user_id, meal_type, option['ingredients'])
-        data = {
-            'user_id': user_id,
-            'meal_type': meal_type,
-            'meal_name': meal_name,
-            'meal_ingredients': json.dumps(option['ingredients']),
-            'nutrition_total': json.dumps(option['nutritional_totals'])
-        }
-        try:
-            # Delete existing record to respect unique constraint
-            supabase.table("personal_recommendation")\
-                .delete()\
-                .eq("user_id", user_id)\
-                .eq("meal_type", meal_type)\
-                .eq("meal_name", meal_name)\
-                .execute()
+# Recommend meals for a user, respecting their restrictions and health status
+def recommend_meals_for_user(user_id, food_data, clf, feature_names, restricted_foods, daily_nutrients):
+    if user_id not in user_meal_combinations:
+        user_meal_combinations[user_id] = set()
+    
+    used_combinations = user_meal_combinations[user_id]
+    recommendations = []
+    
+    for meal_type in MEAL_TYPES:
+        num_meals = MEALS_PER_TYPE
+        print(f"\n{meal_type.capitalize()} Meals:")
+        attempts = 0
+        max_attempts = 10
+        
+        for i in range(num_meals):
+            meal_generated = False
+            while attempts < max_attempts:
+                meal = generate_meal(food_data, clf, feature_names, set(), restricted_foods, daily_nutrients)
+                if meal:
+                    combination_key = tuple(sorted(meal['ingredient_codes']))
+                    if combination_key not in used_combinations:
+                        rec = {
+                            'user_id': user_id,
+                            'meal_type': meal_type,
+                            'meal_name': meal['meal_name'],
+                            'meal_ingredients': ', '.join(meal['meal_ingredients']),
+                            'nutrition_total': json.dumps(meal['nutrition_total']),
+                            'created_at': datetime.now().isoformat()
+                        }
+                        recommendations.append(rec)
+                        all_recommendations.append(rec)
+                        used_combinations.add(combination_key)
+                        print(f"User ID: {user_id}")
+                        print(f"Meal Type: {meal_type}")
+                        print(f"Meal Name: {meal['meal_name']}")
+                        print("Ingredients:")
+                        for ingredient in meal['meal_ingredients']:
+                            print(f"  - {ingredient}")
+                        print("Nutritional Value:")
+                        nutrients = meal['nutrition_total']
+                        print(f"  - Carbohydrates: {nutrients['carbohydrate']} g")
+                        print(f"  - Proteins: {nutrients['protein']} g")
+                        print(f"  - Fats: {nutrients['total_fat']} g")
+                        print(f"  - Iron: {nutrients['iron_mg']} mg")
+                        print()
+                        meal_generated = True
+                        break
+                attempts += 1
             
-            # Insert the new record
-            supabase.table("personal_recommendation")\
-                .insert(data)\
-                .execute()
-        except Exception as e:
-            print(f"Error storing recommendation for {user_id}, {meal_type}, {meal_name}: {e}")
+            if not meal_generated and all_recommendations:
+                fallback_rec = random.choice(all_recommendations)
+                fallback_meal = {
+                    'meal_name': fallback_rec['meal_name'],
+                    'meal_ingredients': fallback_rec['meal_ingredients'].split(', '),
+                    'nutrition_total': json.loads(fallback_rec['nutrition_total']),
+                    'ingredient_codes': [code for code in food_data if food_data[code]['food_name'] in fallback_rec['meal_ingredients'].split(', ')]
+                }
+                if not any(ingredient in restricted_foods for ingredient in fallback_meal['meal_ingredients']):
+                    combination_key = tuple(sorted(fallback_meal['ingredient_codes']))
+                    if combination_key not in used_combinations:
+                        rec = {
+                            'user_id': user_id,
+                            'meal_type': meal_type,
+                            'meal_name': fallback_meal['meal_name'],
+                            'meal_ingredients': ', '.join(fallback_meal['meal_ingredients']),
+                            'nutrition_total': json.dumps(fallback_meal['nutrition_total']),
+                            'created_at': datetime.now().isoformat()
+                        }
+                        recommendations.append(rec)
+                        used_combinations.add(combination_key)
+                        print(f"User ID: {user_id}")
+                        print(f"Meal Type: {meal_type}")
+                        print(f"Meal Name: {fallback_meal['meal_name']}")
+                        print("Ingredients:")
+                        for ingredient in fallback_meal['meal_ingredients']:
+                            print(f"  - {ingredient}")
+                        print("Nutritional Value:")
+                        nutrients = fallback_meal['nutrition_total']
+                        print(f"  - Carbohydrates: {nutrients['carbohydrate']} g")
+                        print(f"  - Proteins: {nutrients['protein']} g")
+                        print(f"  - Fats: {nutrients['total_fat']} g")
+                        print(f"  - Iron: {nutrients['iron_mg']} mg")
+                        print()
+                    else:
+                        print(f"Warning: No unique {meal_type} meal available for user {user_id}, even with fallback.")
+                else:
+                    print(f"Warning: Fallback meal for {meal_type} contains restricted foods for user {user_id}.")
+            elif not meal_generated:
+                print(f"Warning: Could not generate unique {meal_type} meal for user {user_id} and no fallback available.")
+    
+    return recommendations
 
 # API Endpoint to trigger personalized recommendations
 @app.route('/api/generate-personalized-recommendations', methods=['POST'])
@@ -301,25 +284,50 @@ def generate_personalized_recommendations():
     start_time = time.time()
     user_data = get_user_data(user_id)
     restrictions = user_data['restrictions']
-    reports = user_data['reports']
-    conditions = {}
-    for report in reports:
-        conditions.update(parse_blood_report(report))
-
-    user_targets = adjust_targets(base_targets, conditions)
+    gender = user_data['gender']
     all_recommendations = {}
 
-    for meal_type in ['breakfast', 'lunch', 'dinner']:
-        options = recommend_meals_lr(meal_type, combined_df, restrictions, user_targets, num_meals)
+    # Fetch and parse the latest report
+    report = get_user_report(user_id)
+    if report:
+        print(f"Report: Cholesterol={report['cholesterol']} mg/dl, Sugar={report['sugar']} mg/dl, Hemoglobin={report['hemoglobin']} g/dl")
+        health_status = get_health_status(report, gender)
+        print(f"Health Status: {health_status}")
+        daily_nutrients = adjust_nutrients(DAILY_NUTRIENTS, health_status)
+    else:
+        print("No valid report found, using default nutrients.")
+        health_status = {}
+        daily_nutrients = DAILY_NUTRIENTS
+    
+    print(f"Adjusted Daily Nutrients: {daily_nutrients}")
+
+    # Train decision tree once per request
+    clf, feature_names = train_decision_tree(food_data, daily_nutrients)
+    if clf is None:
+        return jsonify({'error': 'Decision tree training failed'}), 500
+
+    # Delete existing recommendations for this user
+    user_ids = [user_id]
+    if user_ids:
+        delete_existing_recommendations(user_ids)
+
+    # Generate and store new recommendations
+    options = recommend_meals_for_user(user_id, food_data, clf, feature_names, restrictions, daily_nutrients)
+    for meal_type in MEAL_TYPES:
         all_recommendations[meal_type] = [
             {
                 'option': i + 1,
-                'ingredients': option['meal'],
-                'nutritional_totals': {k: round(float(v), 2) for k, v in option['totals'].items()}
-            } for i, option in enumerate(options)
+                'name': option['meal_name'],
+                'ingredients': option['meal_ingredients'].split(', '),
+                'nutritional_totals': json.loads(option['nutrition_total'])
+            } for i, option in enumerate([rec for rec in options if rec['meal_type'] == meal_type])
         ]
-        # Store in Supabase
-        delete_and_insert_recommendations(user_id, meal_type, all_recommendations[meal_type])
+        # Insert into Supabase
+        for option in [rec for rec in options if rec['meal_type'] == meal_type]:
+            try:
+                supabase.table('standard_recommendation').insert(option).execute()
+            except Exception as e:
+                print(f"Error storing recommendation: {str(e)}")
 
     response = {
         'user_id': user_id,
