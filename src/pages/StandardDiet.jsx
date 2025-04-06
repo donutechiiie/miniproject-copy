@@ -146,13 +146,10 @@ const parseNutrition = (nutrition) => {
     if (!parsed) return {};
 
     return {
-      Protein: parsed["protein"] ?? "N/A",
-      Carbs: parsed["carbohydrate"] ?? "N/A",
-      Fats: parsed["total_fat"] ?? "N/A",
-      Iron: parsed["iron"] ?? parsed["iron_mg"] ?? parsed["Fe"] ?? "N/A",
-      Fiber: parsed["fiber"] ?? "N/A",
-      Sugar: parsed["sugar"] ?? "N/A",
-      Sodium: parsed["sodium"] ?? "N/A",
+      Protein: parsed["protein"] ? `${parsed["protein"]} g` : "N/A",
+      Carbs: parsed["carbohydrate"] ? `${parsed["carbohydrate"]} g` : "N/A",
+      Fats: parsed["total_fat"] ? `${parsed["total_fat"]} g` : "N/A",
+      Iron: parsed["iron_mg"] ? `${parsed["iron_mg"]} mg` : "N/A",
     };
   } catch (error) {
     console.error("Error parsing nutrition:", error);
@@ -160,14 +157,16 @@ const parseNutrition = (nutrition) => {
   }
 };
 
-// 🛠 Function to clean ingredient names (remove scientific names)
+// 🛠 Function to clean ingredient names (handle plain comma-separated string)
 const cleanIngredientNames = (ingredients) => {
-  try {
-    const parsed = typeof ingredients === "string" ? JSON.parse(ingredients) : ingredients;
-    return parsed.map((item) => item.split(" (")[0]).join(", "); // Extract common name
-  } catch {
+  if (!ingredients || typeof ingredients !== "string") {
     return "Unknown Ingredients";
   }
+  // Split the comma-separated string and clean each item
+  return ingredients
+    .split(", ")
+    .map((item) => item.split(" (")[0].trim()) // Remove scientific names if present
+    .join(", ");
 };
 
 export default UserMeals;
