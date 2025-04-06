@@ -54,10 +54,8 @@ for table in tables:
     df_name = f"{table}_df"
     dataframes[df_name] = pd.DataFrame(response.data)
 
-# Convert preloaded data to dictionary format, including all food_codes from both tables
+# Convert preloaded data to dictionary format
 food_data = {}
-
-# Step 1: Process nutritionaldata
 nutri_df = dataframes['nutritionaldata_df']
 for _, row in nutri_df.iterrows():
     food_code = row['food_code']
@@ -66,20 +64,15 @@ for _, row in nutri_df.iterrows():
         'carbohydrate': row.get('carbohydrate', None),
         'protein': row.get('protein', None),
         'total_fat': row.get('total_fat', None),
-        'iron_mg': None  # Initially set to None, will be updated if present in minerals_trace_elements
+        'iron_mg': None
     }
 
-# Step 2: Process minerals_trace_elements and merge or add new entries
 minerals_df = dataframes['minerals_trace_elements_df']
 for _, row in minerals_df.iterrows():
     food_code = row['food_code']
     if food_code in food_data:
-        # Update existing entry with mineral data
-        food_data[food_code].update({
-            'iron_mg': row.get('iron_mg', None)
-        })
+        food_data[food_code].update({'iron_mg': row.get('iron_mg', None)})
     else:
-        # Add new entry for food_code unique to minerals_trace_elements
         food_data[food_code] = {
             'food_name': row['food_name'] or f"Unnamed_{food_code}",
             'carbohydrate': None,
@@ -142,7 +135,7 @@ def adjust_nutrients(base_nutrients, health_status):
             adjusted['total_fat'] = int(base_nutrients['total_fat'] * factors['total_fat'])
     return adjusted
 
-# Decision tree to classify if a meal meets nutritional balance with adjusted targets
+# Decision tree to classify if a meal meets nutritional balance
 def train_decision_tree(food_data, daily_nutrients):
     X = []
     y = []
@@ -162,7 +155,7 @@ def train_decision_tree(food_data, daily_nutrients):
     clf.fit(X, y)
     return clf, feature_names
 
-# Generate a unique meal, respecting user restrictions and health status
+# Generate a unique meal
 def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_foods, daily_nutrients):
     available_foods = {
         k: v for k, v in food_data.items() 
@@ -205,17 +198,15 @@ def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_fo
         'ingredient_codes': meal_ingredients
     }
 
-# Delete existing recommendations for a user
-def delete_existing_recommendations(user_ids):
-    for user_id in user_ids:
-        for meal_type in MEAL_TYPES:
-            try:
-                supabase.table('standard_recommendation').delete().eq('user_id', user_id).eq('meal_type', meal_type).execute()
-                print(f"Deleted existing recommendations for user {user_id} and meal type {meal_type}.")
-            except Exception as e:
-                print(f"Error deleting existing recommendations for user {user_id}: {e}")
+# Delete existing recommendations for a user and meal type
+def delete_existing_recommendations(user_id, meal_type):
+    try:
+        response = supabase.table('personal_recommendation').delete().eq('user_id', user_id).eq('meal_type', meal_type).execute()
+        print(f"Deleted existing recommendations for user {user_id} and meal type {meal_type}.")
+    except Exception as e:
+        print(f"Error deleting existing recommendations for user {user_id} and meal type {meal_type}: {e}")
 
-# Recommend meals for a user, respecting their restrictions and health status
+# Recommend meals for a user
 def recommend_meals_for_user(user_id, food_data, clf, feature_names, restricted_foods, daily_nutrients):
     if user_id not in user_meal_combinations:
         user_meal_combinations[user_id] = set()
@@ -337,22 +328,21 @@ def generate_personalized_recommendations():
     
     print(f"Adjusted Daily Nutrients: {daily_nutrients}")
 
-    # Train decision tree once per request
+    # Train decision tree
     clf, feature_names = train_decision_tree(food_data, daily_nutrients)
     if clf is None:
         return jsonify({'error': 'Decision tree training failed'}), 500
 
-    # Delete existing recommendations for this user
-    user_ids = [user_id]
-    if user_ids:
-        delete_existing_recommendations(user_ids)
+    # Delete existing recommendations for this user per meal type
+    for meal_type in MEAL_TYPES:
+        delete_existing_recommendations(user_id, meal_type)
 
     # Generate and store new recommendations
     options = recommend_meals_for_user(user_id, food_data, clf, feature_names, restrictions, daily_nutrients)
     for meal_type in MEAL_TYPES:
         all_recommendations[meal_type] = [
             {
-                'option': i + 1,  # Fixed typo: 'Chomsky' to 'option'
+                'option': i + 1,
                 'name': option['meal_name'],
                 'ingredients': option['meal_ingredients'].split(', '),
                 'nutritional_totals': json.loads(option['nutrition_total'])
@@ -361,9 +351,9 @@ def generate_personalized_recommendations():
         # Insert into Supabase
         for option in [rec for rec in options if rec['meal_type'] == meal_type]:
             try:
-                supabase.table('standard_recommendation').insert(option).execute()
+                supabase.table('personal_recommendation').insert(option).execute()
             except Exception as e:
-                print(f"Error storing recommendation: {str(e)}")
+                print(f"Error storing recommendation for {option['meal_name']}: {e}")
 
     response = {
         'user_id': user_id,
