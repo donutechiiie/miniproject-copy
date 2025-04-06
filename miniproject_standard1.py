@@ -4,7 +4,6 @@ import numpy as np
 from supabase import create_client, Client
 from sklearn.tree import DecisionTreeClassifier
 import time
-import re
 import random
 import json
 from flask_cors import CORS
@@ -12,221 +11,215 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
 
-# Supabase credentials
-url = "https://jujxoskixfadyvrxlaru.supabase.co"
-key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1anhvc2tpeGZhZHl2cnhsYXJ1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjM4MjI5NSwiZXhwIjoyMDU3OTU4Mjk1fQ.Ka4RjOSpSr5ODKpklgvFJkx9iNPxgqwIMFLbQU5-NMo"
-supabase: Client = create_client(url, key)
+# Supabase configuration
+SUPABASE_URL = "https://jujxoskixfadyvrxlaru.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1anhvc2tpeGZhZHl2cnhsYXJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIzODIyOTUsImV4cCI6MjA1Nzk1ODI5NX0.WcDFgHAMGbsksGUto44U4ke33yz_hONETzQX3U6-VcQ"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Nutritional targets
-targets = {
-    'breakfast': {
-        'carbohydrate': 90, 'protein': 30, 'total_fat': 24, 'dietary_fibre_total': 10,
-        'total_ascorbic_acid': 20, 'calcium_mg': 300, 'iron_mg': 4 - 4, 'vite': 5,
-        'linoleic_c18_2n6': 5, 'alpha_linolenic_c18_3n3': 0.5, 'lys': 1.5, 'met': 0.5
-    },
-    'lunch': {
-        'carbohydrate': 120, 'protein': 40, 'total_fat': 32, 'dietary_fibre_total': 15,
-        'total_ascorbic_acid': 30, 'calcium_mg': 400, 'iron_mg': 6, 'vite': 7,
-        'linoleic_c18_2n6': 7, 'alpha_linolenic_c18_3n3': 0.7, 'lys': 2.0, 'met': 0.7
-    },
-    'dinner': {
-        'carbohydrate': 90, 'protein': 30, 'total_fat': 24, 'dietary_fibre_total': 10,
-        'total_ascorbic_acid': 20, 'calcium_mg': 300, 'iron_mg': 4, 'vite': 5,
-        'linoleic_c18_2n6': 5, 'alpha_linolenic_c18_3n3': 0.5, 'lys': 1.5, 'met': 0.5
-    }
+# Nutritional requirements (daily values, simplified)
+DAILY_NUTRIENTS = {
+    'carbohydrate': 300,  # grams
+    'protein': 50,        # grams
+    'total_fat': 70,      # grams
+    'iron_mg': 18,        # mg
 }
+
+MEAL_TYPES = ['breakfast', 'lunch', 'dinner']
+MEALS_PER_TYPE = 3  # Fixed to 3 meals per type
+used_meal_names = set()  # To ensure unique meal names
+user_meal_combinations = {}  # Dictionary to track combinations per user
+all_recommendations = []  # Store all recommendations globally
 
 # Fetch and preprocess data once at startup
 print("Loading data...")
 start_time = time.time()
-tables = {
-    "nutritionaldata": "nutritional_df",
-    "watersolublevitamins": "vitamins_df",
-    "amino_acid_profile": "amino_df",
-    "carotenoids": "carotenoids_df",
-    "edibleoils": "oils_df",
-    "fat_soluble_vitamins": "fat_vitamins_df",
-    "fatty_acid_profile": "fatty_acids_df",
-    "minerals_trace_elements": "minerals_df",
-    "oligosaccharides_phytosterols": "oligo_df",
-    "organic_acids": "organic_df",
-    "polyphenols": "polyphenols_df",
-    "starch_and_sugars": "starch_df"
-}
-
+tables = ['nutritionaldata', 'minerals_trace_elements']
 dataframes = {}
-for table, df_name in tables.items():
+for table in tables:
     response = supabase.table(table).select("*").execute()
+    df_name = f"{table}_df"
     dataframes[df_name] = pd.DataFrame(response.data)
 
-combined_df = dataframes["nutritional_df"]
-for df_name, df in dataframes.items():
-    if df_name != "nutritional_df":
-        combined_df = combined_df.merge(df, on='food_code', how='left', suffixes=('', f'_{df_name}'))
-combined_df.fillna(0, inplace=True)
+# Convert preloaded data to the original dictionary format
+food_data = {}
+for _, row in dataframes['nutritionaldata_df'].iterrows():
+    food_code = row['food_code']
+    food_data[food_code] = {'food_name': row['food_name'] or f"Unnamed_{food_code}"}
+    for df_name, df in dataframes.items():
+        if df_name != "nutritionaldata_df":
+            food_data[food_code].update({k: v for k, v in df[df['food_code'] == food_code].iloc[0].to_dict().items() if k not in ['food_code', 'food_name', 'num_regions'] and v is not None})
 print(f"Data loaded in {time.time() - start_time:.2f} seconds")
 
-# Helper functions
+# Fetch restrictions for a specific user
 def get_user_restrictions(user_id):
-    response = supabase.table("UserTable").select("notes").eq("auth_uid", user_id).execute()
+    response = supabase.table('UserTable').select('notes').eq('auth_uid', user_id).execute()
     if response.data:
         notes = response.data[0].get('notes') or {}
-        restrictions = notes.get('restrictions', []) if isinstance(notes, dict) else []
+        restrictions = notes if isinstance(notes, list) else []
         return [r.lower() for r in restrictions if isinstance(r, str)]
     return []
 
-def train_decision_tree(df, meal_type):
-    features = ['carbohydrate', 'protein', 'total_fat', 'dietary_fibre_total',
-               'total_ascorbic_acid', 'calcium_mg', 'iron_mg', 'vite',
-               'linoleic_c18_2n6', 'alpha_linolenic_c18_3n3', 'lys', 'met']
-    X = df[features].values
-    y = np.array([1 if (row['carbohydrate'] > 0 and row['carbohydrate'] <= targets[meal_type]['carbohydrate'] * 1.5 and
-                        row['protein'] > 0 and row['protein'] <= targets[meal_type]['protein'] * 1.5 and
-                        row['total_fat'] > 0 and row['total_fat'] <= targets[meal_type]['total_fat'] * 1.5)
-                  else 0
-                  for _, row in df.iterrows()])
-    clf = DecisionTreeClassifier(max_depth=5, random_state=42)
-    clf.fit(X, y)
-    return clf
-
-def meal_name_exists(user_id, meal_type, meal_name):
+# Delete existing recommendations for a user and meal type
+def delete_existing_recommendations(user_id, meal_type):
     try:
-        response = supabase.table("standard_recommendation").select("meal_name")\
-            .eq("user_id", user_id)\
-            .eq("meal_type", meal_type)\
-            .eq("meal_name", meal_name)\
-            .execute()
-        return len(response.data) > 0
-    except Exception:
-        return False
+        response = supabase.table('standard_recommendation').delete().eq('user_id', user_id).eq('meal_type', meal_type).execute()
+        print(f"Deleted existing recommendations for user {user_id} and meal type {meal_type}.")
+    except Exception as e:
+        print(f"Error deleting existing recommendations: {e}")
 
-def generate_meal_name(user_id, meal_type, ingredients):
-    if not ingredients:
-        return f"{meal_type.capitalize()} Placeholder"
-    def simplify_name(name):
-        return re.split(r'[,(]', name)[0].strip()
-    main_ingredients = [simplify_name(ingredients[i]) for i in range(min(2, len(ingredients)))]
-    base_name = f"{meal_type.capitalize()} {main_ingredients[0]} & {main_ingredients[1]}"
-    if not meal_name_exists(user_id, meal_type, base_name):
-        return base_name
-    descriptors = ['Delight', 'Rise & Shine', 'Feast', 'Glow', 'Harmony']
-    for descriptor in descriptors:
-        new_name = f"{base_name} {descriptor}"
-        if not meal_name_exists(user_id, meal_type, new_name):
-            return new_name
-    if len(ingredients) >= 3:
-        third_ingredient = simplify_name(ingredients[2])
-        new_name = f"{base_name} with {third_ingredient}"
-        if not meal_name_exists(user_id, meal_type, new_name):
-            return new_name
-    return f"{base_name} {random.randint(1, 100)}"
+# Decision tree to classify if a meal meets nutritional balance (original logic preserved)
+def train_decision_tree(food_data):
+    X = []
+    y = []
+    feature_names = ['carbohydrate', 'protein', 'total_fat', 'iron_mg']
+    
+    for food_code, nutrients in food_data.items():
+        features = [nutrients.get(feat, 0) for feat in feature_names]
+        X.append(features)
+        balanced_count = sum(1 for feat, val in zip(feature_names, features) if val > 0 and DAILY_NUTRIENTS[feat] * 0.1 <= val <= DAILY_NUTRIENTS[feat] * 0.5)
+        y.append(1 if balanced_count >= 2 else 0)
+    
+    if not X:
+        print("ERROR: No training data for decision tree.")
+        return None, feature_names
+    
+    clf = DecisionTreeClassifier(random_state=42)
+    clf.fit(X, y)
+    return clf, feature_names
 
-def recommend_meals_dt(user_id, meal_type, df, restrictions, num_meals=3):
-    if restrictions:
-        pattern = '|'.join([fr'\b{restr}\b' for restr in restrictions] + [fr'{restr}.*' for restr in restrictions])
-        filtered_df = df[~df['food_name_nutri'].str.lower().str.contains(pattern, na=False, case=False)]
-    else:
-        filtered_df = df.copy()
+# Generate a unique meal, respecting user restrictions (original logic preserved)
+def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_foods):
+    available_foods = {
+        k: v for k, v in food_data.items() 
+        if k not in used_ingredients and v['food_name'] not in restricted_foods
+    }
+    if len(available_foods) < 2:
+        return None
     
-    clf = train_decision_tree(filtered_df, meal_type)
-    features = ['carbohydrate', 'protein', 'total_fat', 'dietary_fibre_total',
-               'total_ascorbic_acid', 'calcium_mg', 'iron_mg', 'vite',
-               'linoleic_c18_2n6', 'alpha_linolenic_c18_3n3', 'lys', 'met']
-    X = filtered_df[features].values
-    predictions = clf.predict(X)
-    suitable_foods = filtered_df[predictions == 1].sample(frac=1, random_state=42).reset_index(drop=True)
+    meal_ingredients = random.sample(list(available_foods.keys()), min(3, len(available_foods)))
+    total_nutrients = {}
     
-    meal_options = []
-    used_meal_sets = set()
-    min_targets = {k: v * 0.85 for k, v in targets[meal_type].items()}
-    max_targets = {k: v * 1.2 for k, v in targets[meal_type].items()}
+    for food_code in meal_ingredients:
+        nutrients = food_data[food_code]
+        for key, value in nutrients.items():
+            if key != 'food_name' and isinstance(value, (int, float)):
+                total_nutrients[key] = total_nutrients.get(key, 0) + value
     
-    for meal_num in range(num_meals):
-        meal = []
-        totals = {key: 0 for key in targets[meal_type].keys()}
-        shuffled_foods = suitable_foods.sample(frac=1, random_state=meal_num * 100).reset_index(drop=True)
-        idx = 0
-        while idx < len(shuffled_foods):
-            row = shuffled_foods.iloc[idx]
-            food = row.get('food_name_nutri') or row.get('food_name')
-            temp_totals = totals.copy()
-            for nutrient in totals.keys():
-                temp_totals[nutrient] += row.get(nutrient, 0)
-            if all(temp_totals[n] <= max_targets[n] for n in temp_totals):
-                meal.append(food)
-                totals = temp_totals
-            idx += 1
-            if all(totals[n] >= min_targets[n] for n in totals):
-                meal_tuple = tuple(sorted(meal))
-                if meal_tuple not in used_meal_sets:
-                    used_meal_sets.add(meal_tuple)
-                    meal_name = generate_meal_name(user_id, meal_type, meal)
-                    meal_options.append({'meal': meal, 'totals': totals, 'name': meal_name})
-                    break
-        if len(meal_options) <= meal_num and idx >= len(shuffled_foods):
-            shuffled_foods = suitable_foods.sample(frac=1, random_state=meal_num * 200).reset_index(drop=True)
-            idx = 0
-            while idx < len(shuffled_foods):
-                row = shuffled_foods.iloc[idx]
-                food = row.get('food_name_nutri') or row.get('food_name')
-                temp_totals = totals.copy()
-                for nutrient in totals.keys():
-                    temp_totals[nutrient] += row.get(nutrient, 0)
-                if all(temp_totals[n] <= max_targets[n] for n in temp_totals):
-                    meal.append(food)
-                    totals = temp_totals
-                idx += 1
-                if all(totals[n] >= min_targets[n] for n in totals):
-                    meal_tuple = tuple(sorted(meal))
-                    if meal_tuple not in used_meal_sets:
-                        used_meal_sets.add(meal_tuple)
-                        meal_name = generate_meal_name(user_id, meal_type, meal)
-                        meal_options.append({'meal': meal, 'totals': totals, 'name': meal_name})
+    X_test = [total_nutrients.get(feat, 0) for feat in feature_names]
+    is_balanced = clf.predict([X_test])[0] if clf else True
+    
+    if not is_balanced:
+        return None
+    
+    base_name = random.choice(['Mix', 'Combo', 'Plate'])
+    ingredient_name = food_data[meal_ingredients[0]]['food_name'].split()[0]
+    meal_name = f"{ingredient_name} {base_name} {random.randint(1, 100)}"
+    while meal_name in used_meal_names:
+        meal_name = f"{ingredient_name} {base_name} {random.randint(1, 100)}"
+    used_meal_names.add(meal_name)
+    
+    return {
+        'meal_name': meal_name,
+        'meal_ingredients': [food_data[code]['food_name'] for code in meal_ingredients],
+        'nutrition_total': {
+            'carbohydrate': total_nutrients.get('carbohydrate', 0),
+            'protein': total_nutrients.get('protein', 0),
+            'total_fat': total_nutrients.get('total_fat', 0),
+            'iron_mg': total_nutrients.get('iron_mg', 0)
+        },
+        'ingredient_codes': meal_ingredients
+    }
+
+# Recommend meals for a user, respecting their restrictions (original logic preserved)
+def recommend_meals_for_user(user_id, food_data, clf, feature_names, restricted_foods):
+    if user_id not in user_meal_combinations:
+        user_meal_combinations[user_id] = set()
+    
+    used_combinations = user_meal_combinations[user_id]
+    recommendations = []
+    
+    for meal_type in MEAL_TYPES:
+        print(f"\n{meal_type.capitalize()} Meals:")
+        attempts = 0
+        max_attempts = 10
+        
+        for i in range(MEALS_PER_TYPE):
+            meal_generated = False
+            while attempts < max_attempts:
+                meal = generate_meal(food_data, clf, feature_names, set(), restricted_foods)
+                if meal:
+                    combination_key = tuple(sorted(meal['ingredient_codes']))
+                    if combination_key not in used_combinations:
+                        rec = {
+                            'user_id': user_id,
+                            'meal_type': meal_type,
+                            'meal_name': meal['meal_name'],
+                            'meal_ingredients': ', '.join(meal['meal_ingredients']),
+                            'nutrition_total': json.dumps(meal['nutrition_total']),
+                            'created_at': datetime.now().isoformat()
+                        }
+                        recommendations.append(rec)
+                        all_recommendations.append(rec)
+                        used_combinations.add(combination_key)
+                        print(f"User ID: {user_id}")
+                        print(f"Meal Type: {meal_type}")
+                        print(f"Meal Name: {meal['meal_name']}")
+                        print("Ingredients:")
+                        for ingredient in meal['meal_ingredients']:
+                            print(f"  - {ingredient}")
+                        print("Nutritional Value:")
+                        nutrients = meal['nutrition_total']
+                        print(f"  - Carbohydrates: {nutrients['carbohydrate']} g")
+                        print(f"  - Proteins: {nutrients['protein']} g")
+                        print(f"  - Fats: {nutrients['total_fat']} g")
+                        print(f"  - Iron: {nutrients['iron_mg']} mg")
+                        print()
+                        meal_generated = True
                         break
-        if len(meal_options) <= meal_num:
-            meal_tuple = tuple(sorted(meal))
-            if meal_tuple not in used_meal_sets:
-                used_meal_sets.add(meal_tuple)
-                meal_name = generate_meal_name(user_id, meal_type, meal)
-                meal_options.append({'meal': meal, 'totals': totals, 'name': meal_name})
+                attempts += 1
+            
+            if not meal_generated and all_recommendations:
+                fallback_rec = random.choice(all_recommendations)
+                fallback_meal = {
+                    'meal_name': fallback_rec['meal_name'],
+                    'meal_ingredients': fallback_rec['meal_ingredients'].split(', '),
+                    'nutrition_total': json.loads(fallback_rec['nutrition_total']),
+                    'ingredient_codes': [code for code in food_data if food_data[code]['food_name'] in fallback_rec['meal_ingredients'].split(', ')]
+                }
+                if not any(ingredient in restricted_foods for ingredient in fallback_meal['meal_ingredients']):
+                    combination_key = tuple(sorted(fallback_meal['ingredient_codes']))
+                    if combination_key not in used_combinations:
+                        rec = {
+                            'user_id': user_id,
+                            'meal_type': meal_type,
+                            'meal_name': fallback_meal['meal_name'],
+                            'meal_ingredients': ', '.join(fallback_meal['meal_ingredients']),
+                            'nutrition_total': json.dumps(fallback_meal['nutrition_total']),
+                            'created_at': datetime.now().isoformat()
+                        }
+                        recommendations.append(rec)
+                        used_combinations.add(combination_key)
+                        print(f"User ID: {user_id}")
+                        print(f"Meal Type: {meal_type}")
+                        print(f"Meal Name: {fallback_meal['meal_name']}")
+                        print("Ingredients:")
+                        for ingredient in fallback_meal['meal_ingredients']:
+                            print(f"  - {ingredient}")
+                        print("Nutritional Value:")
+                        nutrients = fallback_meal['nutrition_total']
+                        print(f"  - Carbohydrates: {nutrients['carbohydrate']} g")
+                        print(f"  - Proteins: {nutrients['protein']} g")
+                        print(f"  - Fats: {nutrients['total_fat']} g")
+                        print(f"  - Iron: {nutrients['iron_mg']} mg")
+                        print()
+                    else:
+                        print(f"Warning: No unique {meal_type} meal available for user {user_id}, even with fallback.")
+                else:
+                    print(f"Warning: Fallback meal for {meal_type} contains restricted foods for user {user_id}.")
+            elif not meal_generated:
+                print(f"Warning: Could not generate unique {meal_type} meal for user {user_id} and no fallback available.")
     
-    while len(meal_options) < num_meals:
-        base_meal = meal_options[0]['meal'].copy()
-        base_totals = meal_options[0]['totals'].copy()
-        shuffled_foods = suitable_foods.sample(frac=1, random_state=len(meal_options) * 300).reset_index(drop=True)
-        extra_food = shuffled_foods.iloc[0].get('food_name_nutri') or shuffled_foods.iloc[0].get('food_name')
-        new_meal = base_meal + [extra_food]
-        for nutrient in base_totals.keys():
-            base_totals[nutrient] += shuffled_foods.iloc[0].get(nutrient, 0)
-        meal_tuple = tuple(sorted(new_meal))
-        if meal_tuple not in used_meal_sets:
-            used_meal_sets.add(meal_tuple)
-            meal_name = generate_meal_name(user_id, meal_type, new_meal)
-            meal_options.append({'meal': new_meal, 'totals': base_totals, 'name': meal_name})
-    
-    return meal_options[:num_meals]
-
-def delete_and_insert_recommendations(user_id, meal_type, options):
-    for option in options:
-        data = {
-            'user_id': user_id,
-            'meal_type': meal_type,
-            'meal_name': option['name'],
-            'meal_ingredients': json.dumps(option['meal']),
-            'nutrition_total': json.dumps({k: round(float(v), 2) for k, v in option['totals'].items()})
-        }
-        try:
-            supabase.table("standard_recommendation")\
-                .delete()\
-                .eq("user_id", user_id)\
-                .eq("meal_type", meal_type)\
-                .eq("meal_name", option['name'])\
-                .execute()
-            supabase.table("standard_recommendation")\
-                .insert(data)\
-                .execute()
-        except Exception as e:
-            print(f"Error storing recommendation: {str(e)}")
+    return recommendations
 
 # API Endpoint to trigger recommendations
 @app.route('/api/generate-recommendations', methods=['POST'])
@@ -242,17 +235,34 @@ def generate_recommendations():
     restrictions = get_user_restrictions(user_id)
     all_recommendations = {}
 
-    for meal_type in ['breakfast', 'lunch', 'dinner']:
-        options = recommend_meals_dt(user_id, meal_type, combined_df, restrictions, num_meals)
-        delete_and_insert_recommendations(user_id, meal_type, options)
+    # Train decision tree once per request (using preloaded food_data)
+    clf, feature_names = train_decision_tree(food_data)
+    if clf is None:
+        return jsonify({'error': 'Decision tree training failed'}), 500
+
+    # Delete existing recommendations for this user
+    user_ids = [user_id]  # Single user context for API
+    if user_ids:
+        for meal_type in MEAL_TYPES:
+            delete_existing_recommendations(user_id, meal_type)
+
+    # Generate and store new recommendations
+    options = recommend_meals_for_user(user_id, food_data, clf, feature_names, restrictions)
+    for meal_type in MEAL_TYPES:
         all_recommendations[meal_type] = [
             {
                 'option': i + 1,
-                'name': option['name'],
-                'ingredients': option['meal'],
-                'nutritional_totals': {k: round(float(v), 2) for k, v in option['totals'].items()}
-            } for i, option in enumerate(options)
+                'name': option['meal_name'],
+                'ingredients': option['meal_ingredients'].split(', '),
+                'nutritional_totals': json.loads(option['nutrition_total'])
+            } for i, option in enumerate([rec for rec in options if rec['meal_type'] == meal_type])
         ]
+        # Insert into Supabase
+        for option in [rec for rec in options if rec['meal_type'] == meal_type]:
+            try:
+                supabase.table('standard_recommendation').insert(option).execute()
+            except Exception as e:
+                print(f"Error storing recommendation: {str(e)}")
 
     response = {
         'user_id': user_id,
@@ -263,5 +273,5 @@ def generate_recommendations():
 
 if __name__ == '__main__':
     import os
-port = int(os.environ.get("PORT", 5000))  # Use Render's PORT or default to 5000 locally
-app.run(host='0.0.0.0', port=port, debug=False)  # debug=False for production
+    port = int(os.environ.get("PORT", 5000))  # Use Render's PORT or default to 5000 locally
+    app.run(host='0.0.0.0', port=port, debug=False)  # debug=False for production
