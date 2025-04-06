@@ -40,15 +40,36 @@ for table in tables:
     df_name = f"{table}_df"
     dataframes[df_name] = pd.DataFrame(response.data)
 
-# Convert preloaded data to the original dictionary format
+# Convert preloaded data to dictionary format, including all food_codes from nutritionaldata
 food_data = {}
 for _, row in dataframes['nutritionaldata_df'].iterrows():
     food_code = row['food_code']
     food_data[food_code] = {'food_name': row['food_name'] or f"Unnamed_{food_code}"}
-    for df_name, df in dataframes.items():
-        if df_name != "nutritionaldata_df":
-            food_data[food_code].update({k: v for k, v in df[df['food_code'] == food_code].iloc[0].to_dict().items() if k not in ['food_code', 'food_name', 'num_regions'] and v is not None})
-print(f"Data loaded in {time.time() - start_time:.2f} seconds")
+    
+    # Add nutritional data
+    food_data[food_code].update({
+        k: v for k, v in row.to_dict().items() 
+        if k not in ['food_code', 'food_name', 'num_regions'] and v is not None
+    })
+
+# Merge with minerals_trace_elements where available, set missing values to None
+minerals_df = dataframes['minerals_trace_elements_df']
+for food_code in food_data:
+    minerals_row = minerals_df[minerals_df['food_code'] == food_code]
+    if not minerals_row.empty:
+        minerals_dict = minerals_row.iloc[0].to_dict()
+        food_data[food_code].update({
+            k: v for k, v in minerals_dict.items() 
+            if k not in ['food_code', 'food_name', 'num_regions'] and v is not None
+        })
+    else:
+        # If no match in minerals_trace_elements, explicitly set mineral-related fields to None
+        mineral_fields = ['iron_mg']  # Add other mineral fields as needed based on your schema
+        for field in mineral_fields:
+            if field not in food_data[food_code]:
+                food_data[food_code][field] = None
+
+print(f"Data loaded in {time.time() - start_time:.2f} seconds. Loaded {len(food_data)} food items.")
 
 # Fetch restrictions for a specific user
 def get_user_restrictions(user_id):
@@ -67,14 +88,14 @@ def delete_existing_recommendations(user_id, meal_type):
     except Exception as e:
         print(f"Error deleting existing recommendations: {e}")
 
-# Decision tree to classify if a meal meets nutritional balance (original logic preserved)
+# Decision tree to classify if a meal meets nutritional balance
 def train_decision_tree(food_data):
     X = []
     y = []
     feature_names = ['carbohydrate', 'protein', 'total_fat', 'iron_mg']
     
     for food_code, nutrients in food_data.items():
-        features = [nutrients.get(feat, 0) for feat in feature_names]
+        features = [nutrients.get(feat, 0) if nutrients.get(feat) is not None else 0 for feat in feature_names]
         X.append(features)
         balanced_count = sum(1 for feat, val in zip(feature_names, features) if val > 0 and DAILY_NUTRIENTS[feat] * 0.1 <= val <= DAILY_NUTRIENTS[feat] * 0.5)
         y.append(1 if balanced_count >= 2 else 0)
@@ -87,11 +108,11 @@ def train_decision_tree(food_data):
     clf.fit(X, y)
     return clf, feature_names
 
-# Generate a unique meal, respecting user restrictions (original logic preserved)
+# Generate a unique meal, respecting user restrictions
 def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_foods):
     available_foods = {
         k: v for k, v in food_data.items() 
-        if k not in used_ingredients and v['food_name'] not in restricted_foods
+        if k not in used_ingredients and v['food_name'].lower() not in restricted_foods
     }
     if len(available_foods) < 2:
         return None
@@ -102,7 +123,7 @@ def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_fo
     for food_code in meal_ingredients:
         nutrients = food_data[food_code]
         for key, value in nutrients.items():
-            if key != 'food_name' and isinstance(value, (int, float)):
+            if key != 'food_name' and isinstance(value, (int, float)) and value is not None:
                 total_nutrients[key] = total_nutrients.get(key, 0) + value
     
     X_test = [total_nutrients.get(feat, 0) for feat in feature_names]
@@ -130,7 +151,7 @@ def generate_meal(food_data, clf, feature_names, used_ingredients, restricted_fo
         'ingredient_codes': meal_ingredients
     }
 
-# Recommend meals for a user, respecting their restrictions (original logic preserved)
+# Recommend meals for a user, respecting their restrictions
 def recommend_meals_for_user(user_id, food_data, clf, feature_names, restricted_foods):
     if user_id not in user_meal_combinations:
         user_meal_combinations[user_id] = set()
@@ -186,7 +207,7 @@ def recommend_meals_for_user(user_id, food_data, clf, feature_names, restricted_
                     'nutrition_total': json.loads(fallback_rec['nutrition_total']),
                     'ingredient_codes': [code for code in food_data if food_data[code]['food_name'] in fallback_rec['meal_ingredients'].split(', ')]
                 }
-                if not any(ingredient in restricted_foods for ingredient in fallback_meal['meal_ingredients']):
+                if not any(ingredient.lower() in restricted_foods for ingredient in fallback_meal['meal_ingredients']):
                     combination_key = tuple(sorted(fallback_meal['ingredient_codes']))
                     if combination_key not in used_combinations:
                         rec = {
@@ -235,13 +256,13 @@ def generate_recommendations():
     restrictions = get_user_restrictions(user_id)
     all_recommendations = {}
 
-    # Train decision tree once per request (using preloaded food_data)
+    # Train decision tree once per request
     clf, feature_names = train_decision_tree(food_data)
     if clf is None:
         return jsonify({'error': 'Decision tree training failed'}), 500
 
     # Delete existing recommendations for this user
-    user_ids = [user_id]  # Single user context for API
+    user_ids = [user_id]
     if user_ids:
         for meal_type in MEAL_TYPES:
             delete_existing_recommendations(user_id, meal_type)
