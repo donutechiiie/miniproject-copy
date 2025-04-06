@@ -232,7 +232,7 @@ export default function ReportUpload() {
       <td className="border p-2">125 - 200 mg/dL</td>
     </tr>
     <tr>
-      <td className="border p-2">Haemoglobin</td>
+      <td className="border p-2">Hemoglobin</td>
       <td className="border p-2">13.5 - 17.5 g/dL</td>
       <td className="border p-2">12.0 - 15.5 g/dL</td>
     </tr>
