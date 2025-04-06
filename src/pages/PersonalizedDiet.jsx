@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { FaArrowLeft, FaArrowRight } from "react-icons/fa";
-import { supabase } from "../supabaseClient"; // Adjust the path if needed
+import { supabase } from "../supabaseClient";
 
 const Personalized = () => {
   const [meals, setMeals] = useState([]);
@@ -27,7 +27,7 @@ const Personalized = () => {
       const userId = userData.user.id;
 
       const { data: mealData, error: mealError } = await supabase
-        .from("personal_recommendation") // Fetch from personal_recommendation table
+        .from("personal_recommendation")
         .select("*")
         .eq("user_id", userId)
         .order("meal_type", { ascending: true });
@@ -35,10 +35,12 @@ const Personalized = () => {
       if (mealError) {
         setError(mealError.message);
       } else {
-        // Remove scientific names from meal_ingredients
         const cleanedMeals = mealData.map((meal) => ({
           ...meal,
-          meal_ingredients: meal.meal_ingredients.replace(/\((.*?)\)/g, "").trim(),
+          meal_ingredients: meal.meal_ingredients
+            ?.replace(/\((.*?)\)/g, "") // Remove scientific names
+            .replace(/[[\]"]/g, "")     // Remove extra JSON chars if any
+            .trim(),
         }));
         setMeals(cleanedMeals);
       }
@@ -49,11 +51,8 @@ const Personalized = () => {
     fetchMeals();
   }, []);
 
-  if (loading)
-    return <p className="text-center text-lg font-semibold text-gray-600">Loading...</p>;
-
-  if (error)
-    return <p className="text-center text-lg text-red-500">Error: {error}</p>;
+  if (loading) return <p className="text-center text-lg font-semibold text-gray-600">Loading...</p>;
+  if (error) return <p className="text-center text-lg text-red-500">Error: {error}</p>;
 
   const categorizedMeals = {
     breakfast: meals.filter((meal) => meal.meal_type.toLowerCase() === "breakfast"),
@@ -75,23 +74,16 @@ const Personalized = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-white to-gray-100 p-6 flex flex-col items-center w-full">
-      {/* Heading */}
-      <h2 className="text-4xl font-bold text-gray-900 text-center mb-4">
-        Your Personalized Diet Plan
-      </h2>
+      <h2 className="text-4xl font-bold text-gray-900 text-center mb-4">Your Personalized Diet Plan</h2>
       <p className="text-md text-gray-500 text-center mb-8 max-w-3xl font-light">
         A custom meal plan tailored to your nutrition needs. Keep track of your meals and maintain a balanced diet.
       </p>
 
       {["breakfast", "lunch", "dinner"].map((type) => (
         <div key={type} className="w-full max-w-7xl text-center mb-12 px-8">
-          <h3 className="text-3xl font-bold text-blue-600 mb-4 capitalize">
-            {type}
-          </h3>
+          <h3 className="text-3xl font-bold text-blue-600 mb-4 capitalize">{type}</h3>
 
-          {/* Scrollable Meal Section */}
           <div className="relative">
-            {/* Left Scroll Button */}
             <button
               className="absolute left-0 top-1/2 transform -translate-y-1/2 p-3 bg-gray-200 rounded-full shadow-md hover:bg-gray-300 transition z-10"
               onClick={() => scrollLeft(type)}
@@ -99,14 +91,12 @@ const Personalized = () => {
               <FaArrowLeft />
             </button>
 
-            {/* Meal Cards Container */}
             <div
               ref={mealRefs[type]}
               className="flex flex-nowrap gap-8 overflow-x-scroll snap-x snap-mandatory scroll-smooth px-6 hide-scrollbar justify-start"
             >
               {categorizedMeals[type].length > 0 ? (
                 categorizedMeals[type].map((meal) => {
-                  // Parse JSON nutritional data safely
                   let nutritionInfo = {};
                   try {
                     nutritionInfo = JSON.parse(meal.nutrition_total);
@@ -123,19 +113,14 @@ const Personalized = () => {
                         {meal.meal_name}
                       </h3>
                       <p className="text-gray-600 mt-2">
-                        <span className="font-bold">Ingredients:</span> {meal.meal_ingredients.replace(/[[\]"]/g, '')}
+                        <span className="font-bold">Ingredients:</span> {meal.meal_ingredients}
                       </p>
-                      <p className="text-gray-600 mt-2">
-                        <span className="font-bold">Nutritional Info:</span>
-                      </p>
+                      <p className="text-gray-600 mt-2 font-bold">Nutritional Info:</p>
                       <ul className="list-disc list-inside text-gray-600">
-                        <li><strong>Carbs:</strong> {nutritionInfo.carbohydrate || "N/A"} g</li>
-                        <li><strong>Protein:</strong> {nutritionInfo.protein || "N/A"} g</li>
-                        <li><strong>Fat:</strong> {nutritionInfo.total_fat || "N/A"} g</li>
-                        <li><strong>Fiber:</strong> {nutritionInfo.dietary_fibre_total || "N/A"} g</li>
-                        <li><strong>Calcium:</strong> {nutritionInfo.calcium_mg || "N/A"} mg</li>
-                        <li><strong>Iron:</strong> {nutritionInfo.iron_mg || "N/A"} mg</li>
-                        <li><strong>Zinc:</strong> {nutritionInfo.zinc_mg || "N/A"} mg</li>
+                        <li><strong>Carbs:</strong> {nutritionInfo.carbohydrate ? `${nutritionInfo.carbohydrate} g` : "N/A"}</li>
+                        <li><strong>Protein:</strong> {nutritionInfo.protein ? `${nutritionInfo.protein} g` : "N/A"}</li>
+                        <li><strong>Fat:</strong> {nutritionInfo.total_fat ? `${nutritionInfo.total_fat} g` : "N/A"}</li>
+                        <li><strong>Iron:</strong> {nutritionInfo.iron_mg ? `${nutritionInfo.iron_mg} mg` : "N/A"}</li>
                       </ul>
                     </div>
                   );
@@ -145,7 +130,6 @@ const Personalized = () => {
               )}
             </div>
 
-            {/* Right Scroll Button */}
             <button
               className="absolute right-0 top-1/2 transform -translate-y-1/2 p-3 bg-gray-200 rounded-full shadow-md hover:bg-gray-300 transition z-10"
               onClick={() => scrollRight(type)}
