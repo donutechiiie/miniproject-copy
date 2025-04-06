@@ -54,34 +54,39 @@ for table in tables:
     df_name = f"{table}_df"
     dataframes[df_name] = pd.DataFrame(response.data)
 
-# Convert preloaded data to dictionary format, handling missing minerals data
+# Convert preloaded data to dictionary format, including all food_codes from both tables
 food_data = {}
-for _, row in dataframes['nutritionaldata_df'].iterrows():
-    food_code = row['food_code']
-    food_data[food_code] = {'food_name': row['food_name'] or f"Unnamed_{food_code}"}
-    
-    # Add nutritional data
-    food_data[food_code].update({
-        k: v for k, v in row.to_dict().items() 
-        if k not in ['food_code', 'food_name', 'num_regions'] and v is not None
-    })
 
-# Merge with minerals_trace_elements where available, set missing values to None
+# Step 1: Process nutritionaldata
+nutri_df = dataframes['nutritionaldata_df']
+for _, row in nutri_df.iterrows():
+    food_code = row['food_code']
+    food_data[food_code] = {
+        'food_name': row['food_name'] or f"Unnamed_{food_code}",
+        'carbohydrate': row.get('carbohydrate', None),
+        'protein': row.get('protein', None),
+        'total_fat': row.get('total_fat', None),
+        'iron_mg': None  # Initially set to None, will be updated if present in minerals_trace_elements
+    }
+
+# Step 2: Process minerals_trace_elements and merge or add new entries
 minerals_df = dataframes['minerals_trace_elements_df']
-for food_code in food_data:
-    minerals_row = minerals_df[minerals_df['food_code'] == food_code]
-    if not minerals_row.empty:
-        minerals_dict = minerals_row.iloc[0].to_dict()
+for _, row in minerals_df.iterrows():
+    food_code = row['food_code']
+    if food_code in food_data:
+        # Update existing entry with mineral data
         food_data[food_code].update({
-            k: v for k, v in minerals_dict.items() 
-            if k not in ['food_code', 'food_name', 'num_regions'] and v is not None
+            'iron_mg': row.get('iron_mg', None)
         })
     else:
-        # Explicitly set mineral fields to None if no match
-        mineral_fields = ['iron_mg']  # Add other mineral fields as needed
-        for field in mineral_fields:
-            if field not in food_data[food_code]:
-                food_data[food_code][field] = None
+        # Add new entry for food_code unique to minerals_trace_elements
+        food_data[food_code] = {
+            'food_name': row['food_name'] or f"Unnamed_{food_code}",
+            'carbohydrate': None,
+            'protein': None,
+            'total_fat': None,
+            'iron_mg': row.get('iron_mg', None)
+        }
 
 print(f"Data loaded in {time.time() - start_time:.2f} seconds. Loaded {len(food_data)} food items.")
 
@@ -347,7 +352,7 @@ def generate_personalized_recommendations():
     for meal_type in MEAL_TYPES:
         all_recommendations[meal_type] = [
             {
-                Chomsky: i + 1,
+                'option': i + 1,  # Fixed typo: 'Chomsky' to 'option'
                 'name': option['meal_name'],
                 'ingredients': option['meal_ingredients'].split(', '),
                 'nutritional_totals': json.loads(option['nutrition_total'])
